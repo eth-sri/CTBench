@@ -31,7 +31,7 @@ def get_ctbench_data(*args, **kwargs):
     data = torch.load(data_path, weights_only=False)
     x, y = data[0].cpu(), data[1].cpu()
     
-    # Provide explicitly raw 0-1 bounded values to satisfy ABCROWN specification checks
+    # Provide explicitly raw 0-1 bounded values to satisfy alpha-beta-CROWN specification checks
     data_max = torch.ones_like(x)
     data_min = torch.zeros_like(x)
     return x, y, data_max, data_min, eps

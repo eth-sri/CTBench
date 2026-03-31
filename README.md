@@ -134,6 +134,4 @@ Please check our paper for more details. Scripts are included in `./scripts/exam
 
 ## Legacy Support (MN-BaB)
 
-CTBench now uses **alpha-beta-CROWN** as the default certification pipeline. MN-BaB has been demoted to legacy status. 
-
-If you still need to run the old MN-BaB pipeline for reproducibility or historical comparison, please refer to the [`legacy/`](./legacy) directory.
+CTBench now uses **alpha-beta-CROWN** as the default certification pipeline. MN-BaB has been demoted to legacy status. If you still need to run the old MN-BaB pipeline for reproducibility or historical comparison, please refer to the [`legacy/`](./legacy) directory.

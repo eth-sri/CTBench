@@ -49,7 +49,7 @@ def get_args(include:Iterable=["basic", "train", "cert"]):
         parser.add_argument('--save-dir', default=None, type=str, help='Path to save the logs and the best checkpoint.')
         parser.add_argument('--random-seed', default=123, type=int, help="Global random seed for setting up torch, numpy and random.")
         parser.add_argument('--train-eps', required=False, type=float, help='Input epsilon to train with. Set eps=0 for standard training.')
-        parser.add_argument('--test-eps', default=None, type=float, help='Input epsilon to test with. For abCROWN, if not provided, read from the abcrown config file.')
+        parser.add_argument('--test-eps', default=None, type=float, help='Input epsilon to test with. For alpha-beta-CROWN, if not provided, read from the abcrown config file.')
         parser.add_argument('--train-batch', default=100, type=int, help='Batch size for training.')
         parser.add_argument('--test-batch', default=100, type=int, help='Batch size for testing.')
         # gradient ascent attack arguments

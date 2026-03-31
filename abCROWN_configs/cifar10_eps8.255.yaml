@@ -24,8 +24,8 @@ general:
 
 attack:
   pgd_order: before        # Ensuring native PGD runs before complete verification
-  pgd_steps: 100           # Typical default steps for abCROWN PGD
-  pgd_restarts: 30         # Typical default restarts for abCROWN PGD
+  pgd_steps: 100           # Typical default steps for alpha-beta-CROWN PGD
+  pgd_restarts: 30         # Typical default restarts for alpha-beta-CROWN PGD
 
 solver:
   batch_size: 8            # Dynamically overridden by CLI '--test-batch' argument

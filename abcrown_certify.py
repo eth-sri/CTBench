@@ -213,7 +213,7 @@ def run(args):
     net.load_state_dict(torch.load(args.load_model, map_location=device))
     print(f"Loaded {args.load_model}")
 
-    # Read abCROWN config and resolve epsilon before creating BoxModelWrapper
+    # Read alpha-beta-CROWN config and resolve epsilon before creating BoxModelWrapper
     # (BoxModelWrapper reads args.test_eps in its constructor to set max_eps)
     with open(args.abcrown_config, 'r') as f:
         abcrown_yaml = yaml.safe_load(f)
@@ -248,7 +248,7 @@ def run(args):
     if enable_heuristic_dpb:
         print("Heuristic DeepPoly evaluation is ENABLED via config `ctbench.enable_heuristic_dpb`.")
 
-    # Prepare abCROWN configurations once
+    # Prepare alpha-beta-CROWN configurations once
     pid = os.getpid()
     tmp_dir = os.path.abspath("../tmp")
     os.makedirs(tmp_dir, exist_ok=True)
@@ -376,8 +376,8 @@ def run(args):
                 num_adv_attacked += abc_adv.sum().item() # unsafe maps to adv attacked explicitly
                 
                 print(f"  alpha-CROWN cert (natively): {abc_dpb.sum().item()}")
-                print(f"  Adv attacked (abCROWN PGD/natively): {abc_adv.sum().item()}")
-                print(f"  abCROWN cert (BaB): {abc_cert.sum().item()}")
+                print(f"  Adv attacked (alpha-beta-CROWN PGD/natively): {abc_adv.sum().item()}")
+                print(f"  alpha-beta-CROWN cert (BaB): {abc_cert.sum().item()}")
 
                 # Record certification status
                 for sample_idx, verified in zip(kept_idx, abc_dpb | abc_cert):

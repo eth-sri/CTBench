@@ -1,6 +1,6 @@
 # Legacy MN-BaB Pipeline
 
-> **Note:** This is a legacy directory. The main CTBench pipeline has migrated to **abCROWN**. This folder is maintained solely for backward compatibility and reproducing older benchmark results.
+> **Note:** This is a legacy directory. The main CTBench pipeline has migrated to **alpha-beta-CROWN**. This folder is maintained solely for backward compatibility and reproducing older benchmark results.
 
 ## Overview
 
