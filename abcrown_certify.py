@@ -267,10 +267,11 @@ def run(args):
     
     if hasattr(args, "test_batch"):
         abcrown_yaml.setdefault("solver", {})["batch_size"] = args.test_batch
+    abcrown_yaml.setdefault("general", {})["device"] = device
     if hasattr(args, "dp_only") and args.dp_only:
         abcrown_yaml.setdefault("general", {})["complete_verifier"] = "skip"
-        abcrown_yaml.setdefault("solver", {})["bound_prop_method"] = "crown"
-
+        abcrown_yaml.setdefault("solver", {})["bound_prop_method"] = "alpha-crown"
+        
     abcrown_yaml.setdefault("general", {})["results_file"] = result_file_path
     abcrown_yaml.setdefault("general", {})["root_path"] = "../alpha-beta-CROWN"
     abcrown_yaml.setdefault("model", {})["name"] = f'Customized("abcrown_adapter", "get_ctbench_model", model_path="{model_path}")'

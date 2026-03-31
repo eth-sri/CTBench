@@ -1,8 +1,20 @@
 #!/bin/bash
 
-# Configuration
-GPUS=(0 1 2 3)
+# Dynamic GPU allocation
+# Uses GPUs specified by CUDA_VISIBLE_DEVICES if set, otherwise auto-detects all available GPUs.
+if [ -z "$CUDA_VISIBLE_DEVICES" ]; then
+    NUM_GPUS=$(nvidia-smi --list-gpus | wc -l)
+    GPUS=($(seq 0 $((NUM_GPUS - 1))))
+else
+    IFS=',' read -r -a GPUS <<< "$CUDA_VISIBLE_DEVICES"
+fi
+
 CHUNKS=${#GPUS[@]}
+if [ "$CHUNKS" -eq 0 ]; then
+    echo "Error: No GPUs detected. For CPU-only runs (e.g., with --dp-only), invoke abcrown_certify.py directly."
+    exit 1
+fi
+
 TOTAL_SAMPLES=10000
 CHUNK_SIZE=$((TOTAL_SAMPLES / CHUNKS))
 
@@ -23,7 +35,7 @@ fi
 SAVE_DIR="./results/$DATASET/$EPS_DIR/$METHOD"
 mkdir -p "$SAVE_DIR"
 
-echo "Running $METHOD on $DATASET (eps_dir $EPS_DIR) across GPUs ${GPUS[*]}..."
+echo "Running $METHOD on $DATASET (eps_dir $EPS_DIR) across $CHUNKS GPUs (${GPUS[*]})..."
 
 # Pre-download dataset to avoid race conditions when multiple GPU processes start simultaneously
 echo "Pre-downloading dataset '$DATASET' if needed..."
@@ -58,8 +70,7 @@ for i in "${!GPUS[@]}"; do
         --save-dir "$SAVE_DIR" \
         --test-batch "$BATCH" \
         --start-idx "$START" \
-        --end-idx "$END" \
-        --tolerate-error > "$SAVE_DIR/log_${START}_${END}.txt" 2>&1 &
+        --end-idx "$END" > "$SAVE_DIR/log_${START}_${END}.txt" 2>&1 &
 done
 
 echo "Launched parallel processes."

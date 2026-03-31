@@ -131,3 +131,9 @@ Please download from [MEGA](https://mega.nz/folder/3QBgiLaD#YsidcFQ5aGKmGpJF7S1l
 ## Benchmark
 
 Please check our paper for more details. Scripts are included in `./scripts/examples`. For the benchmark models, set the correct hyperparameter either from the description of our paper or directly access the `train_args.json` file included in the pretrained models.
+
+## ⚠️ Legacy Support (MN-BaB)
+
+CTBench now uses **abCROWN** as the default certification pipeline. MN-BaB has been demoted to legacy status. 
+
+If you still need to run the old MN-BaB pipeline for reproducibility or historical comparison, please refer to the [`legacy/`](./legacy) directory.

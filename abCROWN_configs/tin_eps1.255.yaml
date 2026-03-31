@@ -15,8 +15,8 @@ specification:
   epsilon: 0.00392156863   # Used directly by abcrown_certify.py
 
 general:
-  device: cuda             # Corresponds to MNBAB 'use_gpu: true'
-  seed: 100                # Corresponds to MNBAB 'random_seed: 0'
+  device: cuda
+  seed: 100
   deterministic: false
   enable_incomplete_verification: true
   complete_verifier: bab   # Dynamically overridden to 'skip' if CLI '--dp-only' is passed
@@ -31,10 +31,10 @@ solver:
   batch_size: 4            # Dynamically overridden by CLI '--test-batch' argument; small due to large 64x64 inputs
   bound_prop_method: alpha-crown
   alpha-crown:
-    iteration: 40          # Corresponds to MNBAB 'alpha_opt_iterations: 40'
+    iteration: 40
     share_alphas: true
 
 bab:
-  timeout: 1000            # Corresponds to MNBAB 'timeout: 1000'
+  timeout: 1000
   branching:
-    method: kfsb           # Corresponds to MNBAB 'branching.method: babsr'
+    method: kfsb

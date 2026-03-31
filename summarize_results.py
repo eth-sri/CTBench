@@ -4,10 +4,10 @@ import json
 import glob
 
 def aggregate(results_dir):
-    pattern_partial = os.path.join(results_dir, "cert*_*.json")
-    pattern_complete = os.path.join(results_dir, "complete_cert*_*.json")
-    
-    partial_files = sorted(f for f in glob.glob(pattern_partial) if "args" not in f)
+    pattern_partial = os.path.join(results_dir, "cert*.json")
+    pattern_complete = os.path.join(results_dir, "complete_cert*.json")
+
+    partial_files = sorted(f for f in glob.glob(pattern_partial) if "args" not in f and "complete_" not in os.path.basename(f))
     complete_files = sorted(glob.glob(pattern_complete))
     
     def extract_range(path):
