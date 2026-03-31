@@ -183,7 +183,7 @@ def get_args(include:Iterable=["basic", "train", "cert"]):
         parser.add_argument('--abcrown-config', default=None, type=str, help='the config file for alpha-beta-CROWN (a YAML file in abCROWN_configs/).')
         parser.add_argument('--tolerate-error', action='store_true', help='Whether to ignore certification errors (e.g., memory overflows), marking failed samples as undecidable.')
         parser.add_argument('--disable-abcrown', action='store_true', help='Whether to disable alpha-beta-CROWN certification. As a result, it will only invoke IBP, DPBox and the adversarial attack specified.')
-        parser.add_argument('--dp-only', action='store_true', help='Whether to skip Alpha-Beta-CROWN and rely only on fast incomplete lower bounds (Alpha-CROWN). When combined with --disable-abcrown, this option will have no effect.')
+        parser.add_argument('--dp-only', action='store_true', help='Whether to skip alpha-beta-CROWN and rely only on fast incomplete lower bounds (alpha-CROWN). When combined with --disable-abcrown, this option will have no effect.')
         parser.add_argument('--subprocess-verbosity', default='summary', type=str, choices=['all', 'summary', 'ignore'], help='The verbosity level for subprocess outputs (e.g. alpha-beta-CROWN): "all" prints everything, "summary" prints only relevant lines, "ignore" prints nothing.')
 
         parser.add_argument('--start-idx', default=0, type=int, help='the start index of the input in the test dataset (inclusive).')

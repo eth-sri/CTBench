@@ -24,7 +24,7 @@ The main training logic is implemented in ```mix_train.py```. For most cases, tr
 
 Tracking statistics of checkpoints is implemented in ```get_stat.py``` in the form of ```{stat}_loop```, e.g., ```relu_loop``` and ```PI_loop```. These functions are expected to be called at test time and will iterate over the full dataset to compute the corresponding statistics. It is recommended to implement new statistics tracking in a functional way similiarly.
 
-Model certification is done via a combination of IBP (fastest), PGD attack (fast) / autoattack (slow), Alpha-CROWN incomplete bounds, and Branch-and-Bound complete verification via [Alpha-Beta-CROWN](https://github.com/Verified-Intelligence/alpha-beta-CROWN). This is implemented in ```abcrown_certify.py``` with a lightweight adapter (```abcrown_adapter.py```) bridging CTBench models and data to the abCROWN interface. For most cases (except when a new certification method is designed), it is recommended to **not** change these files at all.
+Model certification is done via a combination of IBP (fastest), PGD attack (fast) / autoattack (slow), alpha-CROWN incomplete bounds, and Branch-and-Bound complete verification via [alpha-beta-CROWN](https://github.com/Verified-Intelligence/alpha-beta-CROWN). This is implemented in ```abcrown_certify.py``` with a lightweight adapter (```abcrown_adapter.py```) bridging CTBench models and data to the alpha-beta-CROWN interface. For most cases (except when a new certification method is designed), it is recommended to **not** change these files at all.
 
 Unit tests are included in ```Utility/test_functions.py``` and can be invoked via ```cd Utility; python test_functions.py; cd ..```. Note that these tests are not complete but serves as a minimal check. Make sure to include new unit tests for new `model wrapper`.
 
@@ -93,11 +93,11 @@ To install further requirements please run
 pip install -r requirements.txt
 ```
 
-Python=3.11 and PyTorch=2.8.0 are suggested to install Alpha-Beta-CROWN as they are tested on these versions. However, one may use separate training & certification environments to avoid version conflicts.
+Python=3.11 and PyTorch=2.8.0 are suggested to install alpha-beta-CROWN as they are tested on these versions. However, one may use separate training & certification environments to avoid version conflicts.
 
 ## Certification
 
-First, install Alpha-Beta-CROWN according to the instructions at `https://github.com/Verified-Intelligence/alpha-beta-CROWN`. Ensure it is located at `../alpha-beta-CROWN` relative to the CTBench workspace root.
+First, install alpha-beta-CROWN according to the instructions at `https://github.com/Verified-Intelligence/alpha-beta-CROWN`. Ensure it is located at `../alpha-beta-CROWN` relative to the CTBench workspace root.
 
 Certify your models with the parallel wrapper script ```./run_parallel_abcrown.sh```, which distributes evaluation across multiple GPUs. It requires a model path and a corresponding YAML configuration file from ```./abCROWN_configs```.
 
@@ -113,7 +113,7 @@ For example:
 The certification pipeline automatically performs the following cascade:
 1. **IBP verification** (fastest) — certifies easy samples via interval arithmetic.
 2. **Heuristic DeepPoly** (optional) — enabled via `ctbench.enable_heuristic_dpb: true` in the YAML config.
-3. **Alpha-Beta-CROWN** — for remaining samples, delegates to the verifier which natively handles PGD attacks, Alpha-CROWN incomplete bounds, and Beta-CROWN complete verification.
+3. **alpha-beta-CROWN** — for remaining samples, delegates to the verifier which natively handles PGD attacks, alpha-CROWN incomplete bounds, and beta-CROWN complete verification.
 
 Pre-built YAML configuration files are provided in ```./abCROWN_configs``` for all standard benchmark settings. Key parameters (epsilon, batch size, model/data paths) are automatically injected at runtime.
 
@@ -122,7 +122,7 @@ After certification completes, aggregate per-GPU results using:
 python summarize_results.py ./results/<dataset>/<eps_dir>/<method>
 ```
 
-If a fast evaluation is desired, pass ```--dp-only``` to skip Beta-CROWN and rely only on fast incomplete lower bounds (Alpha-CROWN). Alternatively, use ```--disable-abcrown``` to skip Alpha-Beta-CROWN verification altogether, which will only invoke IBP and the heuristic DeepPoly check.
+If a fast evaluation is desired, pass ```--dp-only``` to skip beta-CROWN and rely only on fast incomplete lower bounds (alpha-CROWN). Alternatively, use ```--disable-abcrown``` to skip alpha-beta-CROWN verification altogether, which will only invoke IBP and the heuristic DeepPoly check.
 
 ## CTBench Pretrained Models
 
@@ -132,8 +132,8 @@ Please download from [MEGA](https://mega.nz/folder/3QBgiLaD#YsidcFQ5aGKmGpJF7S1l
 
 Please check our paper for more details. Scripts are included in `./scripts/examples`. For the benchmark models, set the correct hyperparameter either from the description of our paper or directly access the `train_args.json` file included in the pretrained models.
 
-## ⚠️ Legacy Support (MN-BaB)
+## Legacy Support (MN-BaB)
 
-CTBench now uses **abCROWN** as the default certification pipeline. MN-BaB has been demoted to legacy status. 
+CTBench now uses **alpha-beta-CROWN** as the default certification pipeline. MN-BaB has been demoted to legacy status. 
 
 If you still need to run the old MN-BaB pipeline for reproducibility or historical comparison, please refer to the [`legacy/`](./legacy) directory.

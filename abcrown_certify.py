@@ -368,14 +368,14 @@ def run(args):
                     continue
 
             if not args.disable_abcrown:
-                # 3. try to verify with Alpha-Beta-CROWN
+                # 3. try to verify with alpha-beta-CROWN
                 log_file_path = os.path.join(save_root, f"abcrown_log{postfix}.txt") if getattr(args, "subprocess_verbosity", "summary") != "ignore" else None
                 abc_dpb, abc_cert, abc_adv, abc_undec = verify_with_abcrown(torch_net, x, y, eps, device, config_path=args.abcrown_config, args=args, log_file_path=log_file_path, tolerate_error=args.tolerate_error)
                 num_alpha_crown += abc_dpb.sum().item() # safe-incomplete maps to alpha crown explicitly
                 num_abcrown_bab += abc_cert.sum().item() # safe maps to bab complete explicitly
                 num_adv_attacked += abc_adv.sum().item() # unsafe maps to adv attacked explicitly
                 
-                print(f"  Alpha-CROWN cert (natively): {abc_dpb.sum().item()}")
+                print(f"  alpha-CROWN cert (natively): {abc_dpb.sum().item()}")
                 print(f"  Adv attacked (abCROWN PGD/natively): {abc_adv.sum().item()}")
                 print(f"  abCROWN cert (BaB): {abc_cert.sum().item()}")
 
