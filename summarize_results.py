@@ -122,5 +122,5 @@ def aggregate(results_dir):
     print(f"{'='*55}\n")
 
 if __name__ == "__main__":
-    results_dir = sys.argv[1] if len(sys.argv) > 1 else "./results/cifar10/2.255/IBP/"
+    results_dir = sys.argv[1]
     aggregate(results_dir)

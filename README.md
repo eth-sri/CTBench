@@ -118,17 +118,18 @@ To run IBP + heuristic DeepPoly only (no alpha-beta-CROWN):
 
 The certification pipeline automatically performs the following cascade:
 1. **IBP verification** (fastest) — certifies easy samples via interval arithmetic.
-2. **Heuristic DeepPoly** (optional) — enabled via `ctbench.enable_heuristic_dpb: true` in the YAML config.
+2. **Heuristic DeepPoly** (optional) — enabled via the ```--enable-heuristic-dpb``` flag.
 3. **alpha-beta-CROWN** — for remaining samples, delegates to the verifier which natively handles PGD attacks, alpha-CROWN incomplete bounds, and beta-CROWN complete verification.
 
 Pre-built YAML configuration files are provided in ```./abCROWN_configs``` for all standard benchmark settings. Key parameters (epsilon, batch size, model/data paths) are automatically injected at runtime.
 
 After certification completes, aggregate per-GPU results using:
 ```bash
-python summarize_results.py ./results/<dataset>/<eps_dir>/<method>
+python summarize_results.py <results_directory>
 ```
+where `<results_directory>` is the `--save-dir` you specified, or the model checkpoint's directory if `--save-dir` was omitted (e.g., `./CTBenchRelease/cifar10/2.255/TAPS/`).
 
-If a fast evaluation is desired, pass ```--dp-only``` to skip beta-CROWN and rely only on fast incomplete lower bounds (alpha-CROWN). Alternatively, use ```--disable-abcrown``` to skip alpha-beta-CROWN verification altogether, which will only invoke IBP and the heuristic DeepPoly check (see the second example above).
+If a fast evaluation is desired, pass ```--dp-only``` to skip beta-CROWN and rely only on fast incomplete lower bounds (alpha-CROWN). Alternatively, use ```--disable-abcrown``` to skip alpha-beta-CROWN verification altogether (```--test-eps``` is required in this case, since there is no YAML config to read epsilon from).
 
 ## CTBench Pretrained Models
 
