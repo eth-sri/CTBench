@@ -15,9 +15,6 @@ if [ "$CHUNKS" -eq 0 ]; then
     exit 1
 fi
 
-TOTAL_SAMPLES=10000
-CHUNK_SIZE=$((TOTAL_SAMPLES / CHUNKS))
-
 DATASET=""
 SAVE_DIR=""
 LOAD_MODEL=""
@@ -54,19 +51,33 @@ echo "Running certification across $CHUNKS GPUs (${GPUS[*]})..."
 
 # Pre-download dataset to avoid race conditions when multiple GPU processes start simultaneously
 echo "Pre-downloading dataset '$DATASET' if needed..."
-python3 -c "
-import torchvision, torchvision.transforms as T
+TOTAL_SAMPLES=$(python3 -c "
+import os, sys, torchvision, torchvision.transforms as T
 ds = '$DATASET'
 if ds == 'cifar10':
     torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=T.ToTensor())
-    torchvision.datasets.CIFAR10(root='./data', train=False, download=True, transform=T.ToTensor())
+    test_set = torchvision.datasets.CIFAR10(root='./data', train=False, download=True, transform=T.ToTensor())
 elif ds == 'mnist':
     torchvision.datasets.MNIST(root='./data', train=True, download=True, transform=T.ToTensor())
-    torchvision.datasets.MNIST(root='./data', train=False, download=True, transform=T.ToTensor())
-print(f'{ds} dataset ready.')
-"
-echo "Dataset pre-download complete."
+    test_set = torchvision.datasets.MNIST(root='./data', train=False, download=True, transform=T.ToTensor())
+elif ds == 'tinyimagenet':
+    if not os.path.isdir('./data/tiny-imagenet-200'):
+        import subprocess
+        print('TinyImageNet not found. Downloading via scripts/examples/tinyimagenet/download_tinyimagenet.sh ...', file=sys.stderr)
+        subprocess.run(['bash', 'scripts/examples/tinyimagenet/download_tinyimagenet.sh'], check=True)
+    else:
+        print('TinyImageNet already exists.', file=sys.stderr)
+    test_set = torchvision.datasets.ImageFolder('./data/tiny-imagenet-200/val', transform=T.ToTensor())
+else:
+    print(f'Unknown dataset: {ds}', file=sys.stderr)
+    sys.exit(1)
+print(f'{ds} dataset ready (test size: {len(test_set)})', file=sys.stderr)
+print(len(test_set))
+")
+echo "Dataset pre-download complete. Test set size: $TOTAL_SAMPLES"
+CHUNK_SIZE=$((TOTAL_SAMPLES / CHUNKS))
 
+PIDS=()
 for i in "${!GPUS[@]}"; do
     START=$((i * CHUNK_SIZE))
     END=$(((i + 1) * CHUNK_SIZE))
@@ -81,8 +92,19 @@ for i in "${!GPUS[@]}"; do
         "$@" \
         --start-idx "$START" \
         --end-idx "$END" > "$SAVE_DIR/log_${START}_${END}.txt" 2>&1 &
+    PIDS+=($!)
 done
 
 echo "Launched parallel processes."
-wait
-echo "Done! You can now run: python summarize_results.py $SAVE_DIR"
+
+FAILED=0
+for pid in "${PIDS[@]}"; do
+    wait "$pid" || FAILED=$((FAILED + 1))
+done
+
+if [ $FAILED -ne 0 ]; then
+    echo "Error: $FAILED process(es) exited with errors. Check logs in $SAVE_DIR/log_*.txt for details."
+    exit 1
+else
+    echo "Done! You can now run: python summarize_results.py $SAVE_DIR"
+fi

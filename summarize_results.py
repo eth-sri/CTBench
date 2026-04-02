@@ -32,8 +32,9 @@ def aggregate(results_dir):
         return
 
     print(f"\nDiscovered {len(chosen_files)} result file(s). Aggregating...\n")
-    print(f"{'File':<36} {'Status':<10} {'Total':>6} {'NatAcc':>7} {'IBP':>5} {'DPB':>5} {'a-CROWN':>8} {'BaB':>5} {'PGD':>5} {'Reject':>7} {'Unknown':>8} {'CertRate':>9}")
-    print("-" * 130)
+    print(f"{'':36} {'':10} {'':>6} {'':>7} {'--- Certified (Safe) ---':^27} {'':>2} {'-- Unsafe --':^14} {'':>8} {'':>9}")
+    print(f"{'File':<36} {'Status':<10} {'Total':>6} {'NatAcc':>7} {'IBP':>5} {'DPB':>5} {'a-CROWN':>8} {'BaB':>5} {'':>2} {'PGD':>5} {'Reject':>7} {'Unknown':>8} {'CertRate':>9}")
+    print("-" * 135)
 
     totals = {
         "num_total": 0,
@@ -67,7 +68,7 @@ def aggregate(results_dir):
 
         print(f"  {name:<34} [{status:<8}] {t_tot:>6} "
               f"{t_nat:>7} {t_ibp:>5} {t_heu_dpb:>5} {t_alpha:>8} {t_bab:>5} "
-              f"{t_adv:>5} {t_rej:>7} {t_unknown:>8} "
+              f"{'|':>3} {t_adv:>5} {t_rej:>7} {t_unknown:>8} "
               f"{data.get('total_cert_rate',0.0):>8.1f}%")
 
         totals['num_total'] += t_tot
@@ -79,7 +80,7 @@ def aggregate(results_dir):
         totals['num_adv_attacked'] += t_adv
         totals['num_bab_rejected'] += t_rej
 
-    print("-" * 130)
+    print("-" * 135)
     total = totals["num_total"]
     if total == 0:
         print("No images processed yet.")

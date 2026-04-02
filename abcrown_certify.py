@@ -228,8 +228,6 @@ def run(args):
 
     if abcrown_yaml is not None:
         yaml_eps = abcrown_yaml.get("specification", {}).get("epsilon", None)
-    elif not args.disable_abcrown and abcrown_yaml is None:
-        raise E("Failed to load alpha-beta-CROWN configuration file.")
     else:
         yaml_eps = None
 
@@ -410,15 +408,19 @@ def run(args):
             is_nat_cert_accurate += [f"{int(is_nat_accu[i].item())}{int(is_cert_accu[i].item())}" for i in range(len(is_nat_accu))]
             perf_dict = update_perf(save_root, args, num_cert_ibp, num_nat_accu, num_heuristic_dpb, num_alpha_crown, num_abcrown_bab, num_total, num_adv_attacked, num_bab_rejected, is_nat_cert_accurate, certify_start_time, previous_time, batch_idx, test_loader, postfix, end_idx=current_end_idx)
 
-        perf_dict = update_perf(save_root, args, num_cert_ibp, num_nat_accu, num_heuristic_dpb, num_alpha_crown, num_abcrown_bab, num_total, num_adv_attacked, num_bab_rejected, is_nat_cert_accurate, certify_start_time, previous_time, batch_idx, test_loader, postfix, end_idx=current_end_idx)
-        write_perf_to_json(perf_dict, save_root, filename=f"complete_cert{postfix}.json")
+        if num_total > 0:
+            perf_dict = update_perf(save_root, args, num_cert_ibp, num_nat_accu, num_heuristic_dpb, num_alpha_crown, num_abcrown_bab, num_total, num_adv_attacked, num_bab_rejected, is_nat_cert_accurate, certify_start_time, previous_time, batch_idx, test_loader, postfix, end_idx=current_end_idx)
+            write_perf_to_json(perf_dict, save_root, filename=f"complete_cert{postfix}.json")
+        else:
+            print("Warning: No samples were processed in the given range.")
 
-    for temp_created_path in [model_path, yaml_tmp_path]:
-        if os.path.exists(temp_created_path):
-            try:
-                os.remove(temp_created_path)
-            except OSError:
-                pass
+    if not args.disable_abcrown:
+        for temp_created_path in [model_path, yaml_tmp_path]:
+            if os.path.exists(temp_created_path):
+                try:
+                    os.remove(temp_created_path)
+                except OSError:
+                    pass
 
 def main():
     args = get_args(["basic", "cert"])
