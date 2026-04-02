@@ -97,17 +97,23 @@ Python=3.11 and PyTorch=2.8.0 are suggested to install alpha-beta-CROWN as they 
 
 ## Certification
 
-First, install alpha-beta-CROWN according to the instructions at `https://github.com/Verified-Intelligence/alpha-beta-CROWN`. Ensure it is located at `../alpha-beta-CROWN` relative to the CTBench workspace root.
+First, install alpha-beta-CROWN according to the instructions at `https://github.com/Verified-Intelligence/alpha-beta-CROWN`. Ensure it is located at `../alpha-beta-CROWN` relative to the CTBench workspace root, and that the conda environment is named `alpha-beta-crown` (the certification subprocess invokes `conda run -n alpha-beta-crown`).
 
-Certify your models with the parallel wrapper script ```./run_parallel_abcrown.sh```, which distributes evaluation across multiple GPUs. It requires a model path and a corresponding YAML configuration file from ```./abCROWN_configs```.
+Certify your models with the parallel wrapper script ```./run_parallel_abcrown.sh```, which distributes evaluation across multiple GPUs. All arguments are passed as named flags and forwarded to ```abcrown_certify.py```. Logs are saved to the ```--save-dir``` directory if provided, otherwise to the model checkpoint's directory.
 
+For example, to run full certification with alpha-beta-CROWN:
 ```bash
-./run_parallel_abcrown.sh <dataset> <eps_dir> <net> <method> <config_yaml> <batch_size>
+./run_parallel_abcrown.sh --dataset cifar10 --net cnn_7layer_bn \
+    --load-model ./CTBenchRelease/cifar10/2.255/TAPS/model.ckpt \
+    --abcrown-config abCROWN_configs/cifar10_eps2.255.yaml --test-batch 16 
 ```
 
-For example:
+To run IBP + heuristic DeepPoly only (no alpha-beta-CROWN):
 ```bash
-./run_parallel_abcrown.sh cifar10 2.255 cnn_7layer_bn IBP abCROWN_configs/cifar10_eps2.255.yaml 16
+./run_parallel_abcrown.sh --dataset cifar10 --net cnn_7layer_bn \
+    --load-model ./CTBenchRelease/cifar10/2.255/TAPS/model.ckpt \
+    --test-eps 0.00784313725 --test-batch 16 \
+    --disable-abcrown --enable-heuristic-dpb
 ```
 
 The certification pipeline automatically performs the following cascade:
@@ -122,7 +128,7 @@ After certification completes, aggregate per-GPU results using:
 python summarize_results.py ./results/<dataset>/<eps_dir>/<method>
 ```
 
-If a fast evaluation is desired, pass ```--dp-only``` to skip beta-CROWN and rely only on fast incomplete lower bounds (alpha-CROWN). Alternatively, use ```--disable-abcrown``` to skip alpha-beta-CROWN verification altogether, which will only invoke IBP and the heuristic DeepPoly check.
+If a fast evaluation is desired, pass ```--dp-only``` to skip beta-CROWN and rely only on fast incomplete lower bounds (alpha-CROWN). Alternatively, use ```--disable-abcrown``` to skip alpha-beta-CROWN verification altogether, which will only invoke IBP and the heuristic DeepPoly check (see the second example above).
 
 ## CTBench Pretrained Models
 

@@ -1,6 +1,5 @@
 import os
 os.environ["TORCH_ALLOW_TF32_CUBLAS_OVERRIDE"] = "0"
-os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 
 import torch
 import torch.nn as nn
@@ -53,7 +52,6 @@ def verify_with_abcrown(torch_net, x, y, eps, device, config_path, args, log_fil
     abcrown_path = "../alpha-beta-CROWN/complete_verifier/abcrown.py"
     try:
         print("Launching alpha-beta-CROWN via subprocess...")
-        # subprocess.run(["conda", "run", "-n", "alpha-beta-crown", "python", abcrown_path, "--config", f"../tmp/ctbench_abcrown_temp_{pid}.yaml"], env=env, check=True)
         process = subprocess.Popen(["conda", "run", "-n", "alpha-beta-crown", "python", abcrown_path, "--config", f"../tmp/ctbench_abcrown_temp_{pid}.yaml"], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         in_summary = False
         verbosity = getattr(args, "subprocess_verbosity", "summary")
@@ -67,6 +65,11 @@ def verify_with_abcrown(torch_net, x, y, eps, device, config_path, args, log_fil
                 continue
             else: # summary
                 if log_f:
+                    # Skip tqdm progress bar lines
+                    stripped = line.strip()
+                    if stripped and (stripped[0].isdigit() or stripped.startswith('|')) and 'it/s]' in line:
+                        continue
+
                     is_relevant = False
                     if "############# Summary #############" in line:
                         in_summary = True
@@ -75,7 +78,7 @@ def verify_with_abcrown(torch_net, x, y, eps, device, config_path, args, log_fil
                         is_relevant = True
                     elif "%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%" in line or line.startswith("Result:") or "Result:" in line or "Time out!!!!!!!!" in line:
                         is_relevant = True
-                    
+
                     if is_relevant:
                         log_f.write(line)
         
@@ -124,7 +127,7 @@ def verify_with_abcrown(torch_net, x, y, eps, device, config_path, args, log_fil
     
     return is_dpb_cert, is_abcrown_cert, is_adv_attacked, is_bab_rejected, is_undecidable
 
-def update_perf(save_root, args, num_cert_ibp, num_nat_accu, num_heuristic_dpb, num_alpha_crown, num_abcrown_bab, num_total, num_adv_attacked, num_bab_rejected, is_nat_cert_accurate, certify_start_time, previous_time, batch_idx, test_loader, postfix=""):
+def update_perf(save_root, args, num_cert_ibp, num_nat_accu, num_heuristic_dpb, num_alpha_crown, num_abcrown_bab, num_total, num_adv_attacked, num_bab_rejected, is_nat_cert_accurate, certify_start_time, previous_time, batch_idx, test_loader, postfix="", end_idx=math.inf):
     perf_dict = {
         'num_cert_ibp':num_cert_ibp,
         'num_nat_accu':num_nat_accu,
@@ -143,7 +146,7 @@ def update_perf(save_root, args, num_cert_ibp, num_nat_accu, num_heuristic_dpb, 
         'adv_unattacked_rate': round((num_nat_accu - num_adv_attacked) / num_total * 100, 2) if num_total > 0 else 0,
         "total_cert_rate": round((num_cert_ibp + num_heuristic_dpb + num_alpha_crown + num_abcrown_bab) / num_total * 100, 2) if num_total > 0 else 0,
         "total_time": round(time.time() - certify_start_time + previous_time, 2),
-        "batch_remain": len(test_loader) - batch_idx - 1,
+        "batch_remain": math.ceil(end_idx / args.test_batch) - batch_idx - 1 if end_idx != math.inf else len(test_loader) - batch_idx - 1,
         "is_nat_cert_accurate": is_nat_cert_accurate
         }
     write_perf_to_json(perf_dict, save_root, filename=f"cert{postfix}.json")
@@ -209,7 +212,6 @@ def run(args):
 
     assert os.path.isfile(args.load_model), f"There is no such file {args.load_model}."
     # Use --save-dir if provided, otherwise fall back to the model checkpoint directory
-    # (which for CTBenchRelease already gives dataset/eps/method/ structure)
     if hasattr(args, 'save_dir') and args.save_dir:
         save_root = args.save_dir
         os.makedirs(save_root, exist_ok=True)
@@ -218,15 +220,23 @@ def run(args):
     net.load_state_dict(torch.load(args.load_model, map_location=device))
     print(f"Loaded {args.load_model}")
 
-    # Read alpha-beta-CROWN config and resolve epsilon before creating BoxModelWrapper
-    # (BoxModelWrapper reads args.test_eps in its constructor to set max_eps)
-    with open(args.abcrown_config, 'r') as f:
-        abcrown_yaml = yaml.safe_load(f)
+    # Read alpha-beta-CROWN config (if needed) and resolve epsilon before creating BoxModelWrapper
+    abcrown_yaml = None
+    if not args.disable_abcrown and args.abcrown_config is not None:
+        with open(args.abcrown_config, 'r') as f:
+            abcrown_yaml = yaml.safe_load(f)
 
-    yaml_eps = abcrown_yaml.get("specification", {}).get("epsilon", None)
-    if args.test_eps is not None:
+    if abcrown_yaml is not None:
+        yaml_eps = abcrown_yaml.get("specification", {}).get("epsilon", None)
+    elif not args.disable_abcrown and abcrown_yaml is None:
+        raise E("Failed to load alpha-beta-CROWN configuration file.")
+    else:
+        yaml_eps = None
+
+    if args.test_eps is not None: 
         eps = args.test_eps
-        abcrown_yaml.setdefault("specification", {})["epsilon"] = float(eps)
+        if abcrown_yaml is not None: # overwrite epsilon
+            abcrown_yaml.setdefault("specification", {})["epsilon"] = float(eps)
     elif yaml_eps is not None:
         eps = float(yaml_eps)
         args.test_eps = eps  # Set so BoxModelWrapper can read it
@@ -249,41 +259,42 @@ def run(args):
     torch_net = torch_net.to(device)
     torch_net.eval()
 
-    enable_heuristic_dpb = abcrown_yaml.get("ctbench", {}).get("enable_heuristic_dpb", False)
+    if args.enable_heuristic_dpb is not None:
+        enable_heuristic_dpb = args.enable_heuristic_dpb
+    else:
+        enable_heuristic_dpb = False
     if enable_heuristic_dpb:
-        print("Heuristic DeepPoly evaluation is ENABLED via config `ctbench.enable_heuristic_dpb`.")
+        print("Heuristic DeepPoly evaluation is ENABLED.")
 
-    # Prepare alpha-beta-CROWN configurations once
-    pid = os.getpid()
-    tmp_dir = os.path.abspath("../tmp")
-    os.makedirs(tmp_dir, exist_ok=True)
-    
-    data_path = f"../tmp/ctbench_abcrown_data_{pid}.pt"
-    model_path = f"../tmp/ctbench_abcrown_model_{pid}.pt"
-    result_file_path = f"../tmp/ctbench_abcrown_results_{pid}.pkl"
-    yaml_tmp_path = f"../tmp/ctbench_abcrown_temp_{pid}.yaml"
+    # Prepare alpha-beta-CROWN configurations once (only if abcrown is enabled)
+    if not args.disable_abcrown:
+        pid = os.getpid()
+        tmp_dir = os.path.abspath("../tmp")
+        os.makedirs(tmp_dir, exist_ok=True)
 
-    torch.save(torch_net, model_path)
+        data_path = f"../tmp/ctbench_abcrown_data_{pid}.pt"
+        model_path = f"../tmp/ctbench_abcrown_model_{pid}.pt"
+        result_file_path = f"../tmp/ctbench_abcrown_results_{pid}.pkl"
+        yaml_tmp_path = f"../tmp/ctbench_abcrown_temp_{pid}.yaml"
 
-    if 'ctbench' in abcrown_yaml:
-        del abcrown_yaml['ctbench']
-
-    abcrown_yaml.setdefault("attack", {})["pgd_order"] = "before"
-    
-    if hasattr(args, "test_batch"):
-        abcrown_yaml.setdefault("solver", {})["batch_size"] = args.test_batch
-    abcrown_yaml.setdefault("general", {})["device"] = device
-    if hasattr(args, "dp_only") and args.dp_only:
-        abcrown_yaml.setdefault("general", {})["complete_verifier"] = "skip"
-        abcrown_yaml.setdefault("solver", {})["bound_prop_method"] = "alpha-crown"
+        torch.save(torch_net, model_path)
         
-    abcrown_yaml.setdefault("general", {})["results_file"] = result_file_path
-    abcrown_yaml.setdefault("general", {})["root_path"] = "../alpha-beta-CROWN"
-    abcrown_yaml.setdefault("model", {})["name"] = f'Customized("abcrown_adapter", "get_ctbench_model", model_path="{model_path}")'
-    abcrown_yaml.setdefault("data", {})["dataset"] = f'Customized("abcrown_adapter", "get_ctbench_data", data_path="{data_path}")'
+        abcrown_yaml.setdefault("attack", {})["pgd_order"] = "before"
 
-    with open(yaml_tmp_path, 'w') as f:
-        yaml.dump(abcrown_yaml, f)
+        if hasattr(args, "test_batch"):
+            abcrown_yaml.setdefault("solver", {})["batch_size"] = args.test_batch
+        abcrown_yaml.setdefault("general", {})["device"] = device
+        if hasattr(args, "dp_only") and args.dp_only:
+            abcrown_yaml.setdefault("general", {})["complete_verifier"] = "skip"
+            abcrown_yaml.setdefault("solver", {})["bound_prop_method"] = "alpha-crown"
+
+        abcrown_yaml.setdefault("general", {})["results_file"] = result_file_path
+        abcrown_yaml.setdefault("general", {})["root_path"] = "../alpha-beta-CROWN"
+        abcrown_yaml.setdefault("model", {})["name"] = f'Customized("abcrown_adapter", "get_ctbench_model", model_path="{model_path}")'
+        abcrown_yaml.setdefault("data", {})["dataset"] = f'Customized("abcrown_adapter", "get_ctbench_data", data_path="{data_path}")'
+
+        with open(yaml_tmp_path, 'w') as f:
+            yaml.dump(abcrown_yaml, f)
     
     # prepare statistics
     num_cert_ibp, num_nat_accu, num_heuristic_dpb, num_alpha_crown, num_abcrown_bab, num_total, num_adv_attacked, num_bab_rejected = 0, 0, 0, 0, 0, 0, 0, 0
@@ -315,6 +326,11 @@ def run(args):
     # the range considered is [start_idx, end_idx)
     current_start_idx = args.start_idx + num_total
     current_end_idx = args.end_idx if args.end_idx != -1 else math.inf
+
+    # Truncate the abcrown log file at the start of a run (append mode is used per-subprocess)
+    if not args.disable_abcrown and getattr(args, "subprocess_verbosity", "summary") != "ignore":
+        log_file_path = os.path.join(save_root, f"abcrown_log{postfix}.txt")
+        open(log_file_path, "w").close()
 
     # main certify loop
     certify_start_time = time.time()
@@ -350,7 +366,7 @@ def run(args):
             is_cert_accu = is_IBP_cert_accu.clone().detach() # add IBP certified ones to the list
             if len(x) == 0:
                 is_nat_cert_accurate += [f"{int(is_nat_accu[i].item())}{int(is_cert_accu[i].item())}" for i in range(len(is_nat_accu))]
-                perf_dict = update_perf(save_root, args, num_cert_ibp, num_nat_accu, num_heuristic_dpb, num_alpha_crown, num_abcrown_bab, num_total, num_adv_attacked, num_bab_rejected, is_nat_cert_accurate, certify_start_time, previous_time, batch_idx, test_loader, postfix)
+                perf_dict = update_perf(save_root, args, num_cert_ibp, num_nat_accu, num_heuristic_dpb, num_alpha_crown, num_abcrown_bab, num_total, num_adv_attacked, num_bab_rejected, is_nat_cert_accurate, certify_start_time, previous_time, batch_idx, test_loader, postfix, end_idx=current_end_idx)
                 continue
 
             # 2. try to verify with dp_box
@@ -370,7 +386,7 @@ def run(args):
 
                 if len(x) == 0:
                     is_nat_cert_accurate += [f"{int(is_nat_accu[i].item())}{int(is_cert_accu[i].item())}" for i in range(len(is_nat_accu))]
-                    perf_dict = update_perf(save_root, args, num_cert_ibp, num_nat_accu, num_heuristic_dpb, num_alpha_crown, num_abcrown_bab, num_total, num_adv_attacked, num_bab_rejected, is_nat_cert_accurate, certify_start_time, previous_time, batch_idx, test_loader, postfix)
+                    perf_dict = update_perf(save_root, args, num_cert_ibp, num_nat_accu, num_heuristic_dpb, num_alpha_crown, num_abcrown_bab, num_total, num_adv_attacked, num_bab_rejected, is_nat_cert_accurate, certify_start_time, previous_time, batch_idx, test_loader, postfix, end_idx=current_end_idx)
                     continue
 
             if not args.disable_abcrown:
@@ -392,9 +408,9 @@ def run(args):
                     is_cert_accu[sample_idx] = is_cert_accu[sample_idx] | verified
 
             is_nat_cert_accurate += [f"{int(is_nat_accu[i].item())}{int(is_cert_accu[i].item())}" for i in range(len(is_nat_accu))]
-            perf_dict = update_perf(save_root, args, num_cert_ibp, num_nat_accu, num_heuristic_dpb, num_alpha_crown, num_abcrown_bab, num_total, num_adv_attacked, num_bab_rejected, is_nat_cert_accurate, certify_start_time, previous_time, batch_idx, test_loader, postfix)
+            perf_dict = update_perf(save_root, args, num_cert_ibp, num_nat_accu, num_heuristic_dpb, num_alpha_crown, num_abcrown_bab, num_total, num_adv_attacked, num_bab_rejected, is_nat_cert_accurate, certify_start_time, previous_time, batch_idx, test_loader, postfix, end_idx=current_end_idx)
 
-        perf_dict = update_perf(save_root, args, num_cert_ibp, num_nat_accu, num_heuristic_dpb, num_alpha_crown, num_abcrown_bab, num_total, num_adv_attacked, num_bab_rejected, is_nat_cert_accurate, certify_start_time, previous_time, batch_idx, test_loader, postfix)
+        perf_dict = update_perf(save_root, args, num_cert_ibp, num_nat_accu, num_heuristic_dpb, num_alpha_crown, num_abcrown_bab, num_total, num_adv_attacked, num_bab_rejected, is_nat_cert_accurate, certify_start_time, previous_time, batch_idx, test_loader, postfix, end_idx=current_end_idx)
         write_perf_to_json(perf_dict, save_root, filename=f"complete_cert{postfix}.json")
 
     for temp_created_path in [model_path, yaml_tmp_path]:

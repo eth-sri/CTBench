@@ -181,6 +181,7 @@ def get_args(include:Iterable=["basic", "train", "cert"]):
         parser.add_argument('--load-certify-file', default=None, type=str, help='the certify file to load. A single filename in the same directory as the model.')
         parser.add_argument('--timeout', default=1000, type=float, help='the time limit for certifying one label.')
         parser.add_argument('--abcrown-config', default=None, type=str, help='the config file for alpha-beta-CROWN (a YAML file in abCROWN_configs/).')
+        parser.add_argument('--enable-heuristic-dpb', action='store_true', help='Whether to calculate heuristic deeppoly before moving on to alpha-CROWN.')
         parser.add_argument('--tolerate-error', action='store_true', help='Whether to ignore certification errors (e.g., memory overflows), marking failed samples as undecidable.')
         parser.add_argument('--disable-abcrown', action='store_true', help='Whether to disable alpha-beta-CROWN certification. As a result, it will only invoke IBP, DPBox and the adversarial attack specified.')
         parser.add_argument('--dp-only', action='store_true', help='Whether to skip alpha-beta-CROWN and rely only on fast incomplete lower bounds (alpha-CROWN). When combined with --disable-abcrown, this option will have no effect.')
@@ -217,4 +218,7 @@ def check_args(args, include):
 
     if "cert" in include:
         assert args.load_model is not None, "A saved model is required to be loaded."
-        assert (args.start_idx is None) + (args.end_idx is None) in [0, 2], "If a start idx or end idx is specified, then both must be specified"
+        if not getattr(args, 'disable_abcrown', False):
+            assert args.abcrown_config is not None, "--abcrown-config is required unless --disable-abcrown is set."
+        if getattr(args, 'disable_abcrown', False) and args.test_eps is None:
+            raise ValueError("--test-eps is required when --disable-abcrown is set (no YAML config to read epsilon from).")

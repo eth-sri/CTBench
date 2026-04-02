@@ -1,6 +1,3 @@
-ctbench:
-  enable_heuristic_dpb: true
-
 model:
   # The dynamically generated model wrapper path is automatically injected at runtime
   name: Customized("abcrown_adapter", "get_ctbench_model")
@@ -12,7 +9,7 @@ data:
 specification:
   robustness_type: verified-acc
   norm: .inf
-  epsilon: 0.3             # Used directly by abcrown_certify.py
+  epsilon: 0.3             # Overwritten at runtime if --test-eps is provided
 
 general:
   device: cuda

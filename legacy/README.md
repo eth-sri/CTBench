@@ -1,6 +1,6 @@
 # Legacy MN-BaB Pipeline
 
-> **Note:** This is a legacy directory. The main CTBench pipeline has migrated to **alpha-beta-CROWN**. This folder is maintained solely for backward compatibility and reproducing older benchmark results.
+> **Note:** This is a legacy, archived directory. The main CTBench pipeline has migrated to **alpha-beta-CROWN**. The code here is **not directly runnable** from this subdirectory — all files and directories in `legacy/` must be moved to the project root before use, since the scripts import modules (e.g., `loaders`, `networks`, `model_wrapper`) from the project root.
 
 ## Overview
 
@@ -14,7 +14,7 @@ The original CTBench environment required Python 3.9 due to MN-BaB's dependency 
 conda create --name CTBench python=3.9
 conda activate CTBench
 conda install pytorch==1.12.1 torchvision==0.13.1 torchaudio==0.12.1 cudatoolkit=11.6 -c pytorch -c conda-forge
-pip install -r ../requirements.txt
+pip install -r requirements.txt
 ```
 
 This environment was used for both training and MN-BaB certification. If you are only using MN-BaB for certification (with a separate training environment), the same Python 3.9 constraint applies.
@@ -25,10 +25,10 @@ Install MN-BaB according to the instructions at `https://github.com/eth-sri/mn-b
 
 ## Usage
 
-Certify models using `mnbab_certify.py` with the relevant model path and a corresponding config file from `../MNBAB_configs`:
+After moving the legacy files to the project root, run from the project root:
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 python3 legacy/mnbab_certify.py \
+CUDA_VISIBLE_DEVICES=0 python3 mnbab_certify.py \
     --dataset cifar10 \
     --net cnn_7layer_bn \
     --load-model ./CTBenchRelease/cifar10/2.255/IBP/model.ckpt \
@@ -44,4 +44,4 @@ CUDA_VISIBLE_DEVICES=0 python3 legacy/mnbab_certify.py \
 
 ## Example Scripts
 
-Legacy certification scripts have been moved to `./scripts/examples/` within this directory, mirroring the original `scripts/examples/` layout. Each `cert.sh` uses the MN-BaB pipeline.
+Legacy certification scripts are in `./scripts/examples/` within this directory. Each `cert.sh` uses the MN-BaB pipeline.

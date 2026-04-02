@@ -18,24 +18,39 @@ fi
 TOTAL_SAMPLES=10000
 CHUNK_SIZE=$((TOTAL_SAMPLES / CHUNKS))
 
-# Args
-DATASET=$1
-EPS_DIR=$2   # e.g., 2.255, 8.255, 0.1, 0.3
-NET=$3
-METHOD=$4
-CONFIG=$5
-BATCH=$6
+DATASET=""
+SAVE_DIR=""
+LOAD_MODEL=""
+args=("$@")
 
-if [ -z "$CONFIG" ]; then
-    echo "Usage: ./run_parallel_abcrown.sh <dataset> <eps_dir> <net> <method> <config_yaml> <batch_size>"
-    echo "Example: ./run_parallel_abcrown.sh cifar10 2.255 cnn_7layer_bn IBP abCROWN_configs/cifar10_eps2.255.yaml 16"
+for ((i=0; i<${#args[@]}; i++)); do
+    if [[ "${args[$i]}" == "--dataset" ]]; then
+        DATASET="${args[$i+1]}"
+    fi
+    if [[ "${args[$i]}" == "--save-dir" ]]; then
+        SAVE_DIR="${args[$i+1]}"
+    fi
+    if [[ "${args[$i]}" == "--load-model" ]]; then
+        LOAD_MODEL="${args[$i+1]}"
+    fi
+done
+
+# Default log directory: --save-dir if given, otherwise the model checkpoint's directory
+if [ -z "$SAVE_DIR" ]; then
+    if [ -n "$LOAD_MODEL" ]; then
+        SAVE_DIR="$(dirname "$LOAD_MODEL")"
+    else
+        echo "Error: --load-model must be provided."
+        exit 1
+    fi
+fi
+
+if [ -z "$DATASET" ]; then
+    echo "Error: --dataset flag is required. (e.g., --dataset cifar10)"
     exit 1
 fi
 
-SAVE_DIR="./results/$DATASET/$EPS_DIR/$METHOD"
-mkdir -p "$SAVE_DIR"
-
-echo "Running $METHOD on $DATASET (eps_dir $EPS_DIR) across $CHUNKS GPUs (${GPUS[*]})..."
+echo "Running certification across $CHUNKS GPUs (${GPUS[*]})..."
 
 # Pre-download dataset to avoid race conditions when multiple GPU processes start simultaneously
 echo "Pre-downloading dataset '$DATASET' if needed..."
@@ -63,12 +78,7 @@ for i in "${!GPUS[@]}"; do
     echo "  [GPU $GPU] Samples $START to $END"
     
     CUDA_VISIBLE_DEVICES=$GPU python3 abcrown_certify.py \
-        --dataset "$DATASET" \
-        --net "$NET" \
-        --load-model "./CTBenchRelease/$DATASET/$EPS_DIR/$METHOD/model.ckpt" \
-        --abcrown-config "$CONFIG" \
-        --save-dir "$SAVE_DIR" \
-        --test-batch "$BATCH" \
+        "$@" \
         --start-idx "$START" \
         --end-idx "$END" > "$SAVE_DIR/log_${START}_${END}.txt" 2>&1 &
 done
