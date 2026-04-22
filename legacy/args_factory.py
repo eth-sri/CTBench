@@ -49,7 +49,7 @@ def get_args(include:Iterable=["basic", "train", "cert"]):
         parser.add_argument('--save-dir', default=None, type=str, help='Path to save the logs and the best checkpoint.')
         parser.add_argument('--random-seed', default=123, type=int, help="Global random seed for setting up torch, numpy and random.")
         parser.add_argument('--train-eps', required=False, type=float, help='Input epsilon to train with. Set eps=0 for standard training.')
-        parser.add_argument('--test-eps', default=None, type=float, help='Input epsilon to test with. For alpha-beta-CROWN, if not provided, read from the abcrown config file.')
+        parser.add_argument('--test-eps', required=True, type=float, help='Input epsilon to test with.')
         parser.add_argument('--train-batch', default=100, type=int, help='Batch size for training.')
         parser.add_argument('--test-batch', default=100, type=int, help='Batch size for testing.')
         # gradient ascent attack arguments
@@ -178,14 +178,15 @@ def get_args(include:Iterable=["basic", "train", "cert"]):
 
 
     if "cert" in include:
+        # certify
         parser.add_argument('--load-certify-file', default=None, type=str, help='the certify file to load. A single filename in the same directory as the model.')
         parser.add_argument('--timeout', default=1000, type=float, help='the time limit for certifying one label.')
-        parser.add_argument('--abcrown-config', default=None, type=str, help='the config file for alpha-beta-CROWN (a YAML file in abCROWN_configs/).')
-        parser.add_argument('--enable-heuristic-dpb', action='store_true', help='Whether to calculate heuristic deeppoly before moving on to alpha-CROWN.')
-        parser.add_argument('--tolerate-error', action='store_true', help='Whether to ignore certification errors (e.g., memory overflows), marking failed samples as undecidable.')
-        parser.add_argument('--disable-abcrown', action='store_true', help='Whether to disable alpha-beta-CROWN certification. As a result, it will only invoke IBP, DPBox and the adversarial attack specified.')
-        parser.add_argument('--dp-only', action='store_true', help='Whether to skip alpha-beta-CROWN and rely only on fast incomplete lower bounds (alpha-CROWN). When combined with --disable-abcrown, this option will have no effect.')
-        parser.add_argument('--subprocess-verbosity', default='summary', type=str, choices=['all', 'summary', 'ignore'], help='The verbosity level for subprocess outputs (e.g. alpha-beta-CROWN): "all" prints everything, "summary" prints only relevant lines, "ignore" prints nothing.')
+        parser.add_argument('--mnbab-config', default=None, type=str, help='the config file for MN-BaB.')
+        parser.add_argument('--tolerate-error', action='store_true', help='Whether to ignore MNBaB errors. Normally these are memory overflows.')
+        parser.add_argument('--use-autoattack', action='store_true', help='Whether to invoke AutoAttack. Slightly larger batch size is recommended to reduce amortized cost.')
+        parser.add_argument('--disable-mnbab', action='store_true', help='Whether to disable MNBaB certification. As a result, it will only invoke IBP, DPBox and the adversarial attack specified.')
+        parser.add_argument('--dp-only', action='store_true', help='Whether to disable alpha, prima and Bab. As a result, MNBab certification will be exactly DeepPoly. When combined with disable-mnbab, this option will have no effect.')
+
 
         parser.add_argument('--start-idx', default=0, type=int, help='the start index of the input in the test dataset (inclusive).')
         parser.add_argument('--end-idx', default=-1, type=int, help='the end index of the input in the test dataset (exclusive). -1 for the end of the dataset.')
@@ -218,7 +219,4 @@ def check_args(args, include):
 
     if "cert" in include:
         assert args.load_model is not None, "A saved model is required to be loaded."
-        if not getattr(args, 'disable_abcrown', False):
-            assert args.abcrown_config is not None, "--abcrown-config is required unless --disable-abcrown is set."
-        if getattr(args, 'disable_abcrown', False) and args.test_eps is None:
-            raise ValueError("--test-eps is required when --disable-abcrown is set (no YAML config to read epsilon from).")
+        assert (args.start_idx is None) + (args.end_idx is None) in [0, 2], "If a start idx or end idx is specified, then both must be specified"

@@ -1,0 +1,37 @@
+model:
+  # The dynamically generated model wrapper path is automatically injected at runtime
+  name: Customized("abcrown_adapter", "get_ctbench_model")
+
+data:
+  # The dynamically generated data path is automatically injected at runtime
+  dataset: Customized("abcrown_adapter", "get_ctbench_data")
+
+specification:
+  robustness_type: verified-acc
+  norm: .inf
+  epsilon: 0.00784313725  # Overwritten at runtime if --test-eps is provided
+
+general:
+  device: cuda
+  seed: 100
+  deterministic: false
+  enable_incomplete_verification: true
+  complete_verifier: bab   # Dynamically overridden to 'skip' if CLI '--dp-only' is passed
+  root_path: ../alpha-beta-CROWN
+
+attack:
+  pgd_order: before        # Ensuring native PGD runs before complete verification
+  pgd_steps: 100           # Typical default steps for alpha-beta-CROWN PGD
+  pgd_restarts: 30         # Typical default restarts for alpha-beta-CROWN PGD
+
+solver:
+  batch_size: 16           # Dynamically overridden by CLI '--test-batch' argument
+  bound_prop_method: alpha-crown
+  alpha-crown:
+    iteration: 100
+    share_alphas: true
+
+bab:
+  timeout: 1000
+  branching:
+    method: kfsb

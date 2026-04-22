@@ -24,7 +24,7 @@ The main training logic is implemented in ```mix_train.py```. For most cases, tr
 
 Tracking statistics of checkpoints is implemented in ```get_stat.py``` in the form of ```{stat}_loop```, e.g., ```relu_loop``` and ```PI_loop```. These functions are expected to be called at test time and will iterate over the full dataset to compute the corresponding statistics. It is recommended to implement new statistics tracking in a functional way similiarly.
 
-Model certification is done via a combination of IBP (fastest), PGD attack (fast) / autoattack (slow), CROWN-IBP (fast) and DeepPoly (medium) / MN-BaB (complete verifier, very slow). These are implemented in ```mnbab_certify.py```. For most cases (except when a new certification method is designed), it is recommended to **not** change this file at all.
+Model certification is done via a combination of IBP (fastest), PGD attack (fast) / autoattack (slow), alpha-CROWN incomplete bounds, and Branch-and-Bound complete verification via [alpha-beta-CROWN](https://github.com/Verified-Intelligence/alpha-beta-CROWN). This is implemented in ```abcrown_certify.py``` with a lightweight adapter (```abcrown_adapter.py```) bridging CTBench models and data to the alpha-beta-CROWN interface. For most cases (except when a new certification method is designed), it is recommended to **not** change these files at all.
 
 Unit tests are included in ```Utility/test_functions.py``` and can be invoked via ```cd Utility; python test_functions.py; cd ..```. Note that these tests are not complete but serves as a minimal check. Make sure to include new unit tests for new `model wrapper`.
 
@@ -93,19 +93,43 @@ To install further requirements please run
 pip install -r requirements.txt
 ```
 
-Python=3.9 is necessary to install MN-BaB later as some dependencies are not available in other versions, e.g. gurobipy==9.1.2. However, one may use separate training & certification environment to avoid this.
+Python=3.11 and PyTorch=2.8.0 are suggested to install alpha-beta-CROWN as they are tested on these versions. However, one may use separate training & certification environments to avoid version conflicts.
 
 ## Certification
 
+First, install alpha-beta-CROWN according to the instructions at `https://github.com/Verified-Intelligence/alpha-beta-CROWN`. Ensure it is located at `../alpha-beta-CROWN` relative to the CTBench workspace root, and that the conda environment is named `alpha-beta-crown` (the certification subprocess invokes `conda run -n alpha-beta-crown`).
 
-First, install MN-BaB according to `https://github.com/eth-sri/mn-bab`.
+Certify your models with the parallel wrapper script ```./run_parallel_abcrown.sh```, which distributes evaluation across multiple GPUs. All arguments are passed as named flags and forwarded to ```abcrown_certify.py```. Logs are saved to the ```--save-dir``` directory if provided, otherwise to the model checkpoint's directory.
 
+For example, to run full certification with alpha-beta-CROWN:
+```bash
+./run_parallel_abcrown.sh --dataset cifar10 --net cnn_7layer_bn \
+    --load-model ./CTBenchRelease/cifar10/2.255/TAPS/model.ckpt \
+    --abcrown-config abCROWN_configs/cifar10_eps2.255.yaml --test-batch 16 
+```
 
-Then, certify your models with command ```./mnbab_certify``` with relevant model path and corresponding config file listed in ```./MNBAB_configs```.
+To run IBP + heuristic DeepPoly only (no alpha-beta-CROWN):
+```bash
+./run_parallel_abcrown.sh --dataset cifar10 --net cnn_7layer_bn \
+    --load-model ./CTBenchRelease/cifar10/2.255/TAPS/model.ckpt \
+    --test-eps 0.00784313725 --test-batch 16 \
+    --disable-abcrown --enable-heuristic-dpb
+```
 
-If AutoAttack is desired for stronger attack strength, run ```pip install git+https://github.com/fra31/auto-attack``` and specify ```--use-autoattack```. In most cases (when no gradient masking is expected), using the default PGD attack is faster and provides similar numbers.
+The certification pipeline automatically performs the following cascade:
+1. **IBP verification** (fastest) — certifies easy samples via interval arithmetic.
+2. **Heuristic DeepPoly** (optional) — enabled via the ```--enable-heuristic-dpb``` flag.
+3. **alpha-beta-CROWN** — for remaining samples, delegates to the verifier which natively handles PGD attacks, alpha-CROWN incomplete bounds, and beta-CROWN complete verification.
 
-If a fast evaluation is desired, MNBaB can be disabled via ```--disable-mnbab```. This will skip the complete certification provided by MN-BaB.
+Pre-built YAML configuration files are provided in ```./abCROWN_configs``` for all standard benchmark settings. Key parameters (epsilon, batch size, model/data paths) are automatically injected at runtime.
+
+After certification completes, aggregate per-GPU results using:
+```bash
+python summarize_results.py <results_directory>
+```
+where `<results_directory>` is the `--save-dir` you specified, or the model checkpoint's directory if `--save-dir` was omitted (e.g., `./CTBenchRelease/cifar10/2.255/TAPS/`).
+
+If a fast evaluation is desired, pass ```--dp-only``` to skip beta-CROWN and rely only on fast incomplete lower bounds (alpha-CROWN). Alternatively, use ```--disable-abcrown``` to skip alpha-beta-CROWN verification altogether (```--test-eps``` is required in this case, since there is no YAML config to read epsilon from).
 
 ## CTBench Pretrained Models
 
@@ -114,3 +138,7 @@ Please download from [MEGA](https://mega.nz/folder/3QBgiLaD#YsidcFQ5aGKmGpJF7S1l
 ## Benchmark
 
 Please check our paper for more details. Scripts are included in `./scripts/examples`. For the benchmark models, set the correct hyperparameter either from the description of our paper or directly access the `train_args.json` file included in the pretrained models.
+
+## Legacy Support (MN-BaB)
+
+CTBench now uses **alpha-beta-CROWN** as the default certification pipeline. MN-BaB has been demoted to legacy status. If you still need to run the old MN-BaB pipeline for reproducibility or historical comparison, please refer to the [`legacy/`](./legacy) directory.
