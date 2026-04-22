@@ -6,6 +6,7 @@ import torch.nn as nn
 import numpy as np
 import time
 import math
+import shutil
 from args_factory import get_args
 from loaders import get_loaders
 from networks import get_network, fuse_BN_wrt_Flatten, remove_BN_wrt_Flatten
@@ -25,6 +26,7 @@ try:
 except:
     neptune = None
 nep_log = None # A global variable to store neptune log
+ABCROWN_CONDA_ENV = "unified_ctbench"
 
 def verify_with_abcrown(torch_net, x, y, eps, device, config_path, args, log_file_path=None, tolerate_error=False):
     import subprocess
@@ -52,7 +54,7 @@ def verify_with_abcrown(torch_net, x, y, eps, device, config_path, args, log_fil
     abcrown_path = "../alpha-beta-CROWN/complete_verifier/abcrown.py"
     try:
         print("Launching alpha-beta-CROWN via subprocess...")
-        process = subprocess.Popen(["conda", "run", "-n", "alpha-beta-crown", "python", abcrown_path, "--config", f"../tmp/ctbench_abcrown_temp_{pid}.yaml"], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        process = subprocess.Popen(["conda", "run", "-n", ABCROWN_CONDA_ENV, "python", abcrown_path, "--config", f"../tmp/ctbench_abcrown_temp_{pid}.yaml"], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         in_summary = False
         verbosity = getattr(args, "subprocess_verbosity", "summary")
         log_f = open(log_file_path, "a") if log_file_path else None
@@ -264,6 +266,35 @@ def run(args):
     if enable_heuristic_dpb:
         print("Heuristic DeepPoly evaluation is ENABLED.")
 
+    # parse the start and end of the certify loop (must happen before resume logic)
+    assert args.start_idx >= 0, "Start index must be a non-negative integer."
+    assert args.end_idx == -1 or args.end_idx>args.start_idx, "End index must be larger than start index or -1."
+    postfix = "" if args.start_idx==0 and args.end_idx==-1 else f"_{args.start_idx}_{args.end_idx}"
+
+    # --- Resume logic: early exit for completed shards ---
+    certify_file_to_load = None
+    if args.load_certify_directory:
+        resume_dir = args.load_certify_directory
+        complete_path = os.path.join(resume_dir, f"complete_cert{postfix}.json")
+        partial_path = os.path.join(resume_dir, f"cert{postfix}.json")
+        if os.path.isfile(complete_path):
+            shard_label = f"[{args.start_idx}, {args.end_idx})" if postfix else "full"
+            if os.path.abspath(resume_dir) != os.path.abspath(save_root):
+                shutil.copy2(complete_path, os.path.join(save_root, f"complete_cert{postfix}.json"))
+                cert_args_path = os.path.join(resume_dir, f"cert_args{postfix}.json")
+                if os.path.isfile(cert_args_path):
+                    shutil.copy2(cert_args_path, os.path.join(save_root, f"cert_args{postfix}.json"))
+            print(f"INFO: Shard {shard_label} already complete ({complete_path}), skipping.")
+            return
+        elif os.path.isfile(partial_path):
+            certify_file_to_load = partial_path
+        # else: no file found, start fresh (no message needed)
+    elif args.load_certify_file:
+        print("WARNING: --load-certify-file is deprecated. Use --load-certify-directory instead.")
+        certify_file_to_load = os.path.join(save_root, args.load_certify_file)
+        if not os.path.isfile(certify_file_to_load):
+            certify_file_to_load = None
+
     # Prepare alpha-beta-CROWN configurations once (only if abcrown is enabled)
     if not args.disable_abcrown:
         pid = os.getpid()
@@ -298,8 +329,10 @@ def run(args):
     num_cert_ibp, num_nat_accu, num_heuristic_dpb, num_alpha_crown, num_abcrown_bab, num_total, num_adv_attacked, num_bab_rejected = 0, 0, 0, 0, 0, 0, 0, 0
     previous_time = 0
     is_nat_cert_accurate = []
-    if args.load_certify_file:
-        perf_dict = load_perf_from_json(save_root, args.load_certify_file)
+
+    # --- Resume logic: load partial state ---
+    if certify_file_to_load is not None:
+        perf_dict = load_perf_from_json(os.path.dirname(certify_file_to_load), os.path.basename(certify_file_to_load))
         if perf_dict is not None:
             num_cert_ibp = perf_dict.get('num_cert_ibp', 0)
             num_nat_accu = perf_dict.get('num_nat_accu', 0)
@@ -311,24 +344,29 @@ def run(args):
             num_bab_rejected = perf_dict.get('num_bab_rejected', 0)
             previous_time = perf_dict.get('total_time', 0)
             is_nat_cert_accurate = perf_dict.get('is_nat_cert_accurate', [])
+            print(f"WARNING: Resuming certification from {certify_file_to_load}")
+            print(f"  Loaded: num_total={num_total}, num_nat_accu={num_nat_accu}, "
+                  f"num_cert_ibp={num_cert_ibp}, num_heuristic_dpb={num_heuristic_dpb}, "
+                  f"num_alpha_crown={num_alpha_crown}, num_abcrown_bab={num_abcrown_bab}, "
+                  f"num_adv_attacked={num_adv_attacked}, num_bab_rejected={num_bab_rejected}")
+            print(f"  Will continue from sample index {args.start_idx + num_total}.")
+            print(f"  If this is unexpected, delete {certify_file_to_load} and re-run.")
 
     temp_total_certified = num_cert_ibp + num_heuristic_dpb + num_alpha_crown + num_abcrown_bab
     assert num_total == len(is_nat_cert_accurate) and num_total >= num_nat_accu and num_nat_accu >= temp_total_certified + num_adv_attacked + num_bab_rejected, "The loaded certify file is not consistent. This suggests corruption or manual modification. Please check the file and remove it if necessary."
     if num_total > 0:
         assert num_nat_accu == sum([int(i[0]) for i in is_nat_cert_accurate]) and temp_total_certified == sum([int(i[1]) for i in is_nat_cert_accurate]), "The loaded certify file is not consistent. This suggests corruption or manual modification. Please check the file and remove it if necessary."
 
-    # parse the start and end of the certify loop
-    assert args.start_idx >= 0, "Start index must be a non-negative integer."
-    assert args.end_idx == -1 or args.end_idx>args.start_idx, "End index must be larger than start index or -1."
-    postfix = "" if args.start_idx==0 and args.end_idx==-1 else f"_{args.start_idx}_{args.end_idx}"
     # the range considered is [start_idx, end_idx)
     current_start_idx = args.start_idx + num_total
     current_end_idx = args.end_idx if args.end_idx != -1 else math.inf
 
-    # Truncate the abcrown log file at the start of a run (append mode is used per-subprocess)
+    # Truncate the abcrown log file at the start of a fresh run (append mode is used per-subprocess)
+    # On resume, keep existing logs so prior subprocess output is preserved
     if not args.disable_abcrown and getattr(args, "subprocess_verbosity", "summary") != "ignore":
         log_file_path = os.path.join(save_root, f"abcrown_log{postfix}.txt")
-        open(log_file_path, "w").close()
+        if certify_file_to_load is None:
+            open(log_file_path, "w").close()
 
     # main certify loop
     certify_start_time = time.time()

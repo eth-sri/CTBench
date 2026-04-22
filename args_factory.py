@@ -178,7 +178,8 @@ def get_args(include:Iterable=["basic", "train", "cert"]):
 
 
     if "cert" in include:
-        parser.add_argument('--load-certify-file', default=None, type=str, help='the certify file to load. A single filename in the same directory as the model.')
+        parser.add_argument('--load-certify-file', default=None, type=str, help='(Deprecated: use --load-certify-directory instead) the certify file to load. A single filename in the same directory as the model.')
+        parser.add_argument('--load-certify-directory', default=None, type=str, help='Directory to auto-resume certification from. Looks for cert{postfix}.json / complete_cert{postfix}.json based on --start-idx and --end-idx. If complete, copies the completed shard to --save-dir when needed and skips it; if partial, resumes; if absent, starts fresh.')
         parser.add_argument('--timeout', default=1000, type=float, help='the time limit for certifying one label.')
         parser.add_argument('--abcrown-config', default=None, type=str, help='the config file for alpha-beta-CROWN (a YAML file in abCROWN_configs/).')
         parser.add_argument('--enable-heuristic-dpb', action='store_true', help='Whether to calculate heuristic deeppoly before moving on to alpha-CROWN.')

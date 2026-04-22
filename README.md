@@ -83,21 +83,15 @@ By default, all models are locally logged. One may enable the following addition
 
 Recommended environment setup:
 ```console
-conda create --name CTBench python=3.9
-conda activate CTBench
-conda install pytorch==1.12.1 torchvision==0.13.1 torchaudio==0.12.1 cudatoolkit=11.6 -c pytorch -c conda-forge
+conda env create -f environment.yaml
+conda activate unified_ctbench
 ```
 
-To install further requirements please run 
-```
-pip install -r requirements.txt
-```
-
-Python=3.11 and PyTorch=2.8.0 are suggested to install alpha-beta-CROWN as they are tested on these versions. However, one may use separate training & certification environments to avoid version conflicts.
+The unified environment is intended to run both CTBench training and alpha-beta-CROWN verification from one conda environment. The provided environment uses Python 3.11, PyTorch 2.8.0, and CUDA 12.8 wheels; make sure the target machine has a compatible NVIDIA driver for CUDA 12.8. This setup is not expected to exactly reproduce the original paper numbers, but our sanity-check runs produced on-par results.
 
 ## Certification
 
-First, install alpha-beta-CROWN according to the instructions at `https://github.com/Verified-Intelligence/alpha-beta-CROWN`. Ensure it is located at `../alpha-beta-CROWN` relative to the CTBench workspace root, and that the conda environment is named `alpha-beta-crown` (the certification subprocess invokes `conda run -n alpha-beta-crown`).
+First, install alpha-beta-CROWN according to the instructions at `https://github.com/Verified-Intelligence/alpha-beta-CROWN`. Ensure it is located at `../alpha-beta-CROWN` relative to the CTBench workspace root. The certification subprocess invokes `conda run -n unified_ctbench`, matching the environment created from `environment.yaml`.
 
 Certify your models with the parallel wrapper script ```./run_parallel_abcrown.sh```, which distributes evaluation across multiple GPUs. All arguments are passed as named flags and forwarded to ```abcrown_certify.py```. Logs are saved to the ```--save-dir``` directory if provided, otherwise to the model checkpoint's directory.
 
@@ -115,6 +109,16 @@ To run IBP + heuristic DeepPoly only (no alpha-beta-CROWN):
     --test-eps 0.00784313725 --test-batch 16 \
     --disable-abcrown --enable-heuristic-dpb
 ```
+
+To resume an interrupted parallel certification run, pass the previous output directory to ```--load-certify-directory```. You may reuse the same directory as ```--save-dir```, or write resumed outputs to a new directory for safety:
+```bash
+./run_parallel_abcrown.sh --dataset cifar10 --net cnn_7layer_bn \
+    --load-model ./CTBenchRelease/cifar10/2.255/TAPS/model.ckpt \
+    --abcrown-config abCROWN_configs/cifar10_eps2.255.yaml --test-batch 16 \
+    --load-certify-directory ./results/cifar10_eps2.255_taps \
+    --save-dir ./results/cifar10_eps2.255_taps_resume
+```
+Completed shards with ```complete_cert_<start>_<end>.json``` are copied to the output directory and skipped, while partial shards with ```cert_<start>_<end>.json``` resume from the last processed sample. Use the same GPU sharding as the original run so the shard ranges match.
 
 The certification pipeline automatically performs the following cascade:
 1. **IBP verification** (fastest) — certifies easy samples via interval arithmetic.
