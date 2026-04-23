@@ -32,7 +32,7 @@ def aggregate(results_dir):
         return
 
     print(f"\nDiscovered {len(chosen_files)} result file(s). Aggregating...\n")
-    header = f"{'File':<36} {'Status':<10} {'Total':>6} {'NatAcc':>7} {'IBP':>5} {'DPoly':>5} {'alpha':>7} {'beta':>5} {'':>2} {'AA':>5} {'PGD':>5} {'betaU':>6} {'Unknown':>8} {'CertRate':>9}"
+    header = f"{'File':<36} {'Status':<10} {'Total':>6} {'NatAcc':>7} {'IBP':>5} {'DPoly':>5} {'alpha':>8} {'beta':>5} {'':>3} {'AA':>5} {'PGD':>5} {'betaU':>7} {'Unknown':>8} {'CertRate':>9}"
     row_width = len(header)
     group_header = [" "] * row_width
 
