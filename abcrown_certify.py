@@ -42,6 +42,16 @@ def _initialize_neptune(args):
         neptune = None
 
 
+def _resolve_save_root(args):
+    if hasattr(args, 'save_dir') and args.save_dir:
+        save_root = args.save_dir
+        os.makedirs(save_root, exist_ok=True)
+        return save_root
+
+    assert args.load_model is not None, "Certification requires --load-model."
+    return os.path.dirname(args.load_model)
+
+
 def update_perf(save_root, args, num_cert_ibp, num_nat_accu, num_heuristic_dpb, num_alpha_crown, num_abcrown_bab, num_total, num_autoattack_attacked, num_abcrown_pgd_attacked, num_bab_rejected, is_nat_cert_accurate, certify_start_time, previous_time, batch_idx, test_loader, postfix="", end_idx=math.inf):
     num_external_attacked = num_autoattack_attacked
     num_internal_attacked = num_abcrown_pgd_attacked
@@ -100,7 +110,7 @@ def update_perf(save_root, args, num_cert_ibp, num_nat_accu, num_heuristic_dpb, 
     return perf_dict
 
 
-def _setup_runtime(args):
+def _setup_runtime(args, save_root):
     seed_everything(args.random_seed, strict=True)
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
@@ -119,12 +129,6 @@ def _setup_runtime(args):
     net.eval()
 
     assert os.path.isfile(args.load_model), f"There is no such file {args.load_model}."
-    # Use --save-dir if provided, otherwise fall back to the model checkpoint directory
-    if hasattr(args, 'save_dir') and args.save_dir:
-        save_root = args.save_dir
-        os.makedirs(save_root, exist_ok=True)
-    else:
-        save_root = os.path.dirname(args.load_model)
     net.load_state_dict(torch.load(args.load_model, map_location=device))
     print(f"Loaded {args.load_model}")
 
@@ -381,12 +385,14 @@ def _run_certification_loop(args, runtime, resume_state, postfix):
 
 def run(args):
     _initialize_neptune(args)
-    runtime = _setup_runtime(args)
     postfix = "" if args.start_idx == 0 and args.end_idx == -1 else f"_{args.start_idx}_{args.end_idx}"
-    resume_state = _prepare_resume(args, runtime["save_root"], postfix)
+    save_root = _resolve_save_root(args)
+    resume_state = _prepare_resume(args, save_root, postfix)
     if resume_state["skip"]:
         print(resume_state["message"])
         return
+
+    runtime = _setup_runtime(args, save_root)
 
     if not args.disable_abcrown:
         model_path, yaml_tmp_path = prepare_abcrown_config(runtime["torch_net"], runtime["abcrown_yaml"], args, runtime["device"])

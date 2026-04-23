@@ -3,6 +3,10 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
+resolve_path() {
+    python3 -c 'import os, sys; print(os.path.abspath(sys.argv[1]))' "$1"
+}
+
 # Dynamic GPU allocation
 # Uses GPUs specified by CUDA_VISIBLE_DEVICES if set, otherwise auto-detects all available GPUs.
 if [ -z "$CUDA_VISIBLE_DEVICES" ]; then
@@ -27,26 +31,38 @@ args=("$@")
 PASSTHROUGH_ARGS=()
 
 for ((i=0; i<${#args[@]}; i++)); do
-    if [[ "${args[$i]}" == "--dataset" ]]; then
-        DATASET="${args[$i+1]}"
-    fi
-    if [[ "${args[$i]}" == "--save-dir" ]]; then
-        SAVE_DIR="${args[$i+1]}"
-    fi
-    if [[ "${args[$i]}" == "--load-model" ]]; then
-        LOAD_MODEL="${args[$i+1]}"
-    fi
-    if [[ "${args[$i]}" == "--start-idx" ]]; then
-        USER_START_IDX="${args[$i+1]}"
-        ((i++))
-        continue
-    fi
-    if [[ "${args[$i]}" == "--end-idx" ]]; then
-        USER_END_IDX="${args[$i+1]}"
-        ((i++))
-        continue
-    fi
-    PASSTHROUGH_ARGS+=("${args[$i]}")
+    case "${args[$i]}" in
+        --dataset)
+            DATASET="${args[$i+1]}"
+            PASSTHROUGH_ARGS+=("${args[$i]}" "${args[$i+1]}")
+            ((i++))
+            ;;
+        --save-dir)
+            SAVE_DIR="$(resolve_path "${args[$i+1]}")"
+            PASSTHROUGH_ARGS+=("${args[$i]}" "$SAVE_DIR")
+            ((i++))
+            ;;
+        --load-model)
+            LOAD_MODEL="$(resolve_path "${args[$i+1]}")"
+            PASSTHROUGH_ARGS+=("${args[$i]}" "$LOAD_MODEL")
+            ((i++))
+            ;;
+        --load-certify-directory|--abcrown-config)
+            PASSTHROUGH_ARGS+=("${args[$i]}" "$(resolve_path "${args[$i+1]}")")
+            ((i++))
+            ;;
+        --start-idx)
+            USER_START_IDX="${args[$i+1]}"
+            ((i++))
+            ;;
+        --end-idx)
+            USER_END_IDX="${args[$i+1]}"
+            ((i++))
+            ;;
+        *)
+            PASSTHROUGH_ARGS+=("${args[$i]}")
+            ;;
+    esac
 done
 
 # Default log directory: --save-dir if given, otherwise the model checkpoint's directory
