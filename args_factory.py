@@ -183,6 +183,11 @@ def get_args(include:Iterable=["basic", "train", "cert"]):
         parser.add_argument('--timeout', default=1000, type=float, help='the time limit for certifying one label.')
         parser.add_argument('--abcrown-config', default=None, type=str, help='the config file for alpha-beta-CROWN (a YAML file in abCROWN_configs/).')
         parser.add_argument('--enable-heuristic-dpb', action='store_true', help='Whether to calculate heuristic deeppoly before moving on to alpha-CROWN.')
+        parser.add_argument('--use-autoattack', action='store_true', help='Whether to run AutoAttack before alpha-beta-CROWN and report it as the external adversarial accuracy.')
+        parser.add_argument('--autoattack-version', default='standard', type=str, help='AutoAttack version passed to AutoAttack, e.g. standard or plus.')
+        parser.add_argument('--attack-batch', default=None, type=int, help='Batch size used inside AutoAttack. Defaults to the current certification batch size.')
+        parser.add_argument('--abcrown-batch', default=None, type=int, help='Batch size passed to alpha-beta-CROWN. Defaults to --test-batch.')
+        parser.add_argument('--disable-abcrown-pgd', action='store_true', help='Disable alpha-beta-CROWN internal PGD by setting attack.pgd_order=skip. Useful when using AutoAttack as the external attack statistic.')
         parser.add_argument('--tolerate-error', action='store_true', help='Whether to ignore certification errors (e.g., memory overflows), marking failed samples as undecidable.')
         parser.add_argument('--disable-abcrown', action='store_true', help='Whether to disable alpha-beta-CROWN certification. As a result, it will only invoke IBP, DPBox and the adversarial attack specified.')
         parser.add_argument('--dp-only', action='store_true', help='Whether to skip alpha-beta-CROWN and rely only on fast incomplete lower bounds (alpha-CROWN). When combined with --disable-abcrown, this option will have no effect.')
@@ -223,3 +228,7 @@ def check_args(args, include):
             assert args.abcrown_config is not None, "--abcrown-config is required unless --disable-abcrown is set."
         if getattr(args, 'disable_abcrown', False) and args.test_eps is None:
             raise ValueError("--test-eps is required when --disable-abcrown is set (no YAML config to read epsilon from).")
+        if getattr(args, 'attack_batch', None) is not None:
+            assert args.attack_batch > 0, "--attack-batch must be positive."
+        if getattr(args, 'abcrown_batch', None) is not None:
+            assert args.abcrown_batch > 0, "--abcrown-batch must be positive."

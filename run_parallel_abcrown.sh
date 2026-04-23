@@ -47,6 +47,8 @@ if [ -z "$DATASET" ]; then
     exit 1
 fi
 
+mkdir -p "$SAVE_DIR"
+
 echo "Running certification across $CHUNKS GPUs (${GPUS[*]})..."
 
 # Pre-download dataset to avoid race conditions when multiple GPU processes start simultaneously

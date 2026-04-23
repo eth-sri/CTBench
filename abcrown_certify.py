@@ -25,6 +25,10 @@ try:
     import neptune
 except:
     neptune = None
+try:
+    from autoattack import AutoAttack
+except:
+    AutoAttack = None
 nep_log = None # A global variable to store neptune log
 ABCROWN_CONDA_ENV = "unified_ctbench"
 
@@ -129,23 +133,41 @@ def verify_with_abcrown(torch_net, x, y, eps, device, config_path, args, log_fil
     
     return is_dpb_cert, is_abcrown_cert, is_adv_attacked, is_bab_rejected, is_undecidable
 
-def update_perf(save_root, args, num_cert_ibp, num_nat_accu, num_heuristic_dpb, num_alpha_crown, num_abcrown_bab, num_total, num_adv_attacked, num_bab_rejected, is_nat_cert_accurate, certify_start_time, previous_time, batch_idx, test_loader, postfix="", end_idx=math.inf):
+def run_autoattack(model, x, y, eps, device, args):
+    assert AutoAttack is not None, "AutoAttack is not installed. Install it or run without --use-autoattack."
+    attack_batch = args.attack_batch if args.attack_batch is not None else len(x)
+    adversary = AutoAttack(model, norm='Linf', eps=eps, version=args.autoattack_version, device=device)
+    with torch.enable_grad():
+        x_adv = adversary.run_standard_evaluation(x, y, bs=attack_batch)
+    y_adv = model(x_adv).argmax(dim=1)
+    return y_adv != y
+
+def update_perf(save_root, args, num_cert_ibp, num_nat_accu, num_heuristic_dpb, num_alpha_crown, num_abcrown_bab, num_total, num_autoattack_attacked, num_abcrown_pgd_attacked, num_bab_rejected, is_nat_cert_accurate, certify_start_time, previous_time, batch_idx, test_loader, postfix="", end_idx=math.inf):
+    num_external_attacked = num_autoattack_attacked
+    num_internal_attacked = num_abcrown_pgd_attacked
+    num_unsafe = num_external_attacked + num_internal_attacked + num_bab_rejected
+    has_autoattack = getattr(args, "use_autoattack", False) or num_autoattack_attacked > 0
     perf_dict = {
         'num_cert_ibp':num_cert_ibp,
         'num_nat_accu':num_nat_accu,
         'num_heuristic_dpb':num_heuristic_dpb,
         'num_cert_alpha_crown':num_alpha_crown,
         'num_cert_abcrown':num_abcrown_bab,
-        'num_undecided': num_nat_accu - num_adv_attacked - num_bab_rejected - num_cert_ibp - num_heuristic_dpb - num_alpha_crown - num_abcrown_bab,
+        'num_undecided': num_nat_accu - num_unsafe - num_cert_ibp - num_heuristic_dpb - num_alpha_crown - num_abcrown_bab,
         'num_total':num_total,
-        'num_adv_attacked':num_adv_attacked,
+        'num_adv_attacked':num_external_attacked,
+        'num_autoattack_attacked':num_autoattack_attacked,
+        'num_abcrown_pgd_attacked':num_abcrown_pgd_attacked,
+        'num_abcrown_pgd_unsafe':num_abcrown_pgd_attacked,
         'num_bab_rejected':num_bab_rejected,
         'nat_accu': round(num_nat_accu / num_total * 100, 2) if num_total > 0 else 0,
         'ibp_cert_rate': round(num_cert_ibp / num_total * 100, 2) if num_total > 0 else 0,
         'heuristic_dpb_cert_rate': round(num_heuristic_dpb / num_total * 100, 2) if num_total > 0 else 0,
         'alpha_crown_cert_rate': round(num_alpha_crown / num_total * 100, 2) if num_total > 0 else 0,
         'abcrown_bab_cert_rate': round(num_abcrown_bab / num_total * 100, 2) if num_total > 0 else 0,
-        'adv_unattacked_rate': round((num_nat_accu - num_adv_attacked) / num_total * 100, 2) if num_total > 0 else 0,
+        'adv_unattacked_rate': round((num_nat_accu - num_external_attacked) / num_total * 100, 2) if num_total > 0 else 0,
+        'autoattack_adv_accuracy': round((num_nat_accu - num_autoattack_attacked) / num_total * 100, 2) if num_total > 0 and has_autoattack else None,
+        'abcrown_pgd_unsafe_rate': round(num_abcrown_pgd_attacked / num_total * 100, 2) if num_total > 0 else 0,
         "total_cert_rate": round((num_cert_ibp + num_heuristic_dpb + num_alpha_crown + num_abcrown_bab) / num_total * 100, 2) if num_total > 0 else 0,
         "total_time": round(time.time() - certify_start_time + previous_time, 2),
         "batch_remain": math.ceil(end_idx / args.test_batch) - batch_idx - 1 if end_idx != math.inf else len(test_loader) - batch_idx - 1,
@@ -161,13 +183,18 @@ def update_perf(save_root, args, num_cert_ibp, num_nat_accu, num_heuristic_dpb, 
         nep_log['num_cert_alpha_crown'].append(num_alpha_crown)
         nep_log['num_cert_abcrown'].append(num_abcrown_bab)
         nep_log['num_total'].append(num_total)
-        nep_log['num_adv_attacked'].append(num_adv_attacked)
+        nep_log['num_adv_attacked'].append(num_external_attacked)
+        nep_log['num_autoattack_attacked'].append(num_autoattack_attacked)
+        nep_log['num_abcrown_pgd_attacked'].append(num_abcrown_pgd_attacked)
         nep_log['nat_accu'].append(perf_dict['nat_accu'])
         nep_log['ibp_cert_rate'].append(perf_dict['ibp_cert_rate'])
         nep_log['heuristic_dpb_cert_rate'].append(perf_dict['heuristic_dpb_cert_rate'])
         nep_log['alpha_crown_cert_rate'].append(perf_dict['alpha_crown_cert_rate'])
         nep_log['abcrown_bab_cert_rate'].append(perf_dict['abcrown_bab_cert_rate'])
         nep_log['adv_unattacked_rate'].append(perf_dict['adv_unattacked_rate'])
+        if perf_dict['autoattack_adv_accuracy'] is not None:
+            nep_log['autoattack_adv_accuracy'].append(perf_dict['autoattack_adv_accuracy'])
+        nep_log['abcrown_pgd_unsafe_rate'].append(perf_dict['abcrown_pgd_unsafe_rate'])
         nep_log['total_cert_rate'].append(perf_dict['total_cert_rate'])
 
     return perf_dict
@@ -287,6 +314,11 @@ def run(args):
             print(f"INFO: Shard {shard_label} already complete ({complete_path}), skipping.")
             return
         elif os.path.isfile(partial_path):
+            if os.path.abspath(resume_dir) != os.path.abspath(save_root):
+                shutil.copy2(partial_path, os.path.join(save_root, f"cert{postfix}.json"))
+                cert_args_path = os.path.join(resume_dir, f"cert_args{postfix}.json")
+                if os.path.isfile(cert_args_path):
+                    shutil.copy2(cert_args_path, os.path.join(save_root, f"cert_args{postfix}.json"))
             certify_file_to_load = partial_path
         # else: no file found, start fresh (no message needed)
     elif args.load_certify_file:
@@ -308,10 +340,11 @@ def run(args):
 
         torch.save(torch_net, model_path)
         
-        abcrown_yaml.setdefault("attack", {})["pgd_order"] = "before"
+        abcrown_yaml.setdefault("attack", {})["pgd_order"] = "skip" if args.disable_abcrown_pgd else "before"
 
         if hasattr(args, "test_batch"):
-            abcrown_yaml.setdefault("solver", {})["batch_size"] = args.test_batch
+            abcrown_batch = args.abcrown_batch if args.abcrown_batch is not None else args.test_batch
+            abcrown_yaml.setdefault("solver", {})["batch_size"] = abcrown_batch
         abcrown_yaml.setdefault("general", {})["device"] = device
         if hasattr(args, "dp_only") and args.dp_only:
             abcrown_yaml.setdefault("general", {})["complete_verifier"] = "skip"
@@ -326,7 +359,8 @@ def run(args):
             yaml.dump(abcrown_yaml, f)
     
     # prepare statistics
-    num_cert_ibp, num_nat_accu, num_heuristic_dpb, num_alpha_crown, num_abcrown_bab, num_total, num_adv_attacked, num_bab_rejected = 0, 0, 0, 0, 0, 0, 0, 0
+    num_cert_ibp, num_nat_accu, num_heuristic_dpb, num_alpha_crown, num_abcrown_bab, num_total = 0, 0, 0, 0, 0, 0
+    num_autoattack_attacked, num_abcrown_pgd_attacked, num_bab_rejected = 0, 0, 0
     previous_time = 0
     is_nat_cert_accurate = []
 
@@ -340,7 +374,12 @@ def run(args):
             num_alpha_crown = perf_dict.get('num_cert_alpha_crown', perf_dict.get('num_cert_dpb', 0))
             num_abcrown_bab = perf_dict.get('num_cert_abcrown', 0)
             num_total = perf_dict.get('num_total', 0)
-            num_adv_attacked = perf_dict.get('num_adv_attacked', 0)
+            if 'num_autoattack_attacked' in perf_dict or 'num_abcrown_pgd_attacked' in perf_dict:
+                num_autoattack_attacked = perf_dict.get('num_autoattack_attacked', perf_dict.get('num_adv_attacked', 0))
+                num_abcrown_pgd_attacked = perf_dict.get('num_abcrown_pgd_attacked', perf_dict.get('num_abcrown_pgd_unsafe', 0))
+            else:
+                num_autoattack_attacked = 0
+                num_abcrown_pgd_attacked = perf_dict.get('num_adv_attacked', 0)
             num_bab_rejected = perf_dict.get('num_bab_rejected', 0)
             previous_time = perf_dict.get('total_time', 0)
             is_nat_cert_accurate = perf_dict.get('is_nat_cert_accurate', [])
@@ -348,12 +387,15 @@ def run(args):
             print(f"  Loaded: num_total={num_total}, num_nat_accu={num_nat_accu}, "
                   f"num_cert_ibp={num_cert_ibp}, num_heuristic_dpb={num_heuristic_dpb}, "
                   f"num_alpha_crown={num_alpha_crown}, num_abcrown_bab={num_abcrown_bab}, "
-                  f"num_adv_attacked={num_adv_attacked}, num_bab_rejected={num_bab_rejected}")
+                  f"num_autoattack_attacked={num_autoattack_attacked}, "
+                  f"num_abcrown_pgd_attacked={num_abcrown_pgd_attacked}, "
+                  f"num_bab_rejected={num_bab_rejected}")
             print(f"  Will continue from sample index {args.start_idx + num_total}.")
             print(f"  If this is unexpected, delete {certify_file_to_load} and re-run.")
 
     temp_total_certified = num_cert_ibp + num_heuristic_dpb + num_alpha_crown + num_abcrown_bab
-    assert num_total == len(is_nat_cert_accurate) and num_total >= num_nat_accu and num_nat_accu >= temp_total_certified + num_adv_attacked + num_bab_rejected, "The loaded certify file is not consistent. This suggests corruption or manual modification. Please check the file and remove it if necessary."
+    temp_total_unsafe = num_autoattack_attacked + num_abcrown_pgd_attacked + num_bab_rejected
+    assert num_total == len(is_nat_cert_accurate) and num_total >= num_nat_accu and num_nat_accu >= temp_total_certified + temp_total_unsafe, "The loaded certify file is not consistent. This suggests corruption or manual modification. Please check the file and remove it if necessary."
     if num_total > 0:
         assert num_nat_accu == sum([int(i[0]) for i in is_nat_cert_accurate]) and temp_total_certified == sum([int(i[1]) for i in is_nat_cert_accurate]), "The loaded certify file is not consistent. This suggests corruption or manual modification. Please check the file and remove it if necessary."
 
@@ -402,7 +444,7 @@ def run(args):
             is_cert_accu = is_IBP_cert_accu.clone().detach() # add IBP certified ones to the list
             if len(x) == 0:
                 is_nat_cert_accurate += [f"{int(is_nat_accu[i].item())}{int(is_cert_accu[i].item())}" for i in range(len(is_nat_accu))]
-                perf_dict = update_perf(save_root, args, num_cert_ibp, num_nat_accu, num_heuristic_dpb, num_alpha_crown, num_abcrown_bab, num_total, num_adv_attacked, num_bab_rejected, is_nat_cert_accurate, certify_start_time, previous_time, batch_idx, test_loader, postfix, end_idx=current_end_idx)
+                perf_dict = update_perf(save_root, args, num_cert_ibp, num_nat_accu, num_heuristic_dpb, num_alpha_crown, num_abcrown_bab, num_total, num_autoattack_attacked, num_abcrown_pgd_attacked, num_bab_rejected, is_nat_cert_accurate, certify_start_time, previous_time, batch_idx, test_loader, postfix, end_idx=current_end_idx)
                 continue
 
             # 2. try to verify with dp_box
@@ -422,20 +464,36 @@ def run(args):
 
                 if len(x) == 0:
                     is_nat_cert_accurate += [f"{int(is_nat_accu[i].item())}{int(is_cert_accu[i].item())}" for i in range(len(is_nat_accu))]
-                    perf_dict = update_perf(save_root, args, num_cert_ibp, num_nat_accu, num_heuristic_dpb, num_alpha_crown, num_abcrown_bab, num_total, num_adv_attacked, num_bab_rejected, is_nat_cert_accurate, certify_start_time, previous_time, batch_idx, test_loader, postfix, end_idx=current_end_idx)
+                    perf_dict = update_perf(save_root, args, num_cert_ibp, num_nat_accu, num_heuristic_dpb, num_alpha_crown, num_abcrown_bab, num_total, num_autoattack_attacked, num_abcrown_pgd_attacked, num_bab_rejected, is_nat_cert_accurate, certify_start_time, previous_time, batch_idx, test_loader, postfix, end_idx=current_end_idx)
+                    continue
+
+            if args.use_autoattack:
+                # 3. run an external attack before alpha-beta-CROWN so attack
+                # statistics are separated from verifier-internal PGD.
+                is_autoattack_attacked = run_autoattack(model_wrapper.net, x, y, eps, device, args)
+                num_autoattack_attacked += is_autoattack_attacked.sum().item()
+                print(f"  AutoAttack attacked: {is_autoattack_attacked.sum().item()}")
+
+                x = x[~is_autoattack_attacked]
+                y = y[~is_autoattack_attacked]
+                kept_idx = kept_idx[torch.where(~is_autoattack_attacked)[0]]
+
+                if len(x) == 0:
+                    is_nat_cert_accurate += [f"{int(is_nat_accu[i].item())}{int(is_cert_accu[i].item())}" for i in range(len(is_nat_accu))]
+                    perf_dict = update_perf(save_root, args, num_cert_ibp, num_nat_accu, num_heuristic_dpb, num_alpha_crown, num_abcrown_bab, num_total, num_autoattack_attacked, num_abcrown_pgd_attacked, num_bab_rejected, is_nat_cert_accurate, certify_start_time, previous_time, batch_idx, test_loader, postfix, end_idx=current_end_idx)
                     continue
 
             if not args.disable_abcrown:
-                # 3. try to verify with alpha-beta-CROWN
+                # 4. try to verify with alpha-beta-CROWN
                 log_file_path = os.path.join(save_root, f"abcrown_log{postfix}.txt") if getattr(args, "subprocess_verbosity", "summary") != "ignore" else None
                 abc_dpb, abc_cert, abc_adv, abc_rej, abc_undec = verify_with_abcrown(torch_net, x, y, eps, device, config_path=args.abcrown_config, args=args, log_file_path=log_file_path, tolerate_error=args.tolerate_error)
                 num_alpha_crown += abc_dpb.sum().item() # safe-incomplete maps to alpha crown explicitly
                 num_abcrown_bab += abc_cert.sum().item() # safe maps to bab complete explicitly
-                num_adv_attacked += abc_adv.sum().item() # unsafe-pgd maps to adv attacked explicitly
+                num_abcrown_pgd_attacked += abc_adv.sum().item() # unsafe-pgd maps to verifier-internal PGD explicitly
                 num_bab_rejected += abc_rej.sum().item() # unsafe (BaB) maps to bab rejected explicitly
 
                 print(f"  alpha-CROWN cert: {abc_dpb.sum().item()}")
-                print(f"  Adv attacked (PGD): {abc_adv.sum().item()}")
+                print(f"  abCROWN PGD unsafe: {abc_adv.sum().item()}")
                 print(f"  Rejected (BaB): {abc_rej.sum().item()}")
                 print(f"  alpha-beta-CROWN cert: {abc_cert.sum().item()}")
 
@@ -444,10 +502,10 @@ def run(args):
                     is_cert_accu[sample_idx] = is_cert_accu[sample_idx] | verified
 
             is_nat_cert_accurate += [f"{int(is_nat_accu[i].item())}{int(is_cert_accu[i].item())}" for i in range(len(is_nat_accu))]
-            perf_dict = update_perf(save_root, args, num_cert_ibp, num_nat_accu, num_heuristic_dpb, num_alpha_crown, num_abcrown_bab, num_total, num_adv_attacked, num_bab_rejected, is_nat_cert_accurate, certify_start_time, previous_time, batch_idx, test_loader, postfix, end_idx=current_end_idx)
+            perf_dict = update_perf(save_root, args, num_cert_ibp, num_nat_accu, num_heuristic_dpb, num_alpha_crown, num_abcrown_bab, num_total, num_autoattack_attacked, num_abcrown_pgd_attacked, num_bab_rejected, is_nat_cert_accurate, certify_start_time, previous_time, batch_idx, test_loader, postfix, end_idx=current_end_idx)
 
         if num_total > 0:
-            perf_dict = update_perf(save_root, args, num_cert_ibp, num_nat_accu, num_heuristic_dpb, num_alpha_crown, num_abcrown_bab, num_total, num_adv_attacked, num_bab_rejected, is_nat_cert_accurate, certify_start_time, previous_time, batch_idx, test_loader, postfix, end_idx=current_end_idx)
+            perf_dict = update_perf(save_root, args, num_cert_ibp, num_nat_accu, num_heuristic_dpb, num_alpha_crown, num_abcrown_bab, num_total, num_autoattack_attacked, num_abcrown_pgd_attacked, num_bab_rejected, is_nat_cert_accurate, certify_start_time, previous_time, batch_idx, test_loader, postfix, end_idx=current_end_idx)
             write_perf_to_json(perf_dict, save_root, filename=f"complete_cert{postfix}.json")
         else:
             print("Warning: No samples were processed in the given range.")

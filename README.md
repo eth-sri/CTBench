@@ -24,7 +24,7 @@ The main training logic is implemented in ```mix_train.py```. For most cases, tr
 
 Tracking statistics of checkpoints is implemented in ```get_stat.py``` in the form of ```{stat}_loop```, e.g., ```relu_loop``` and ```PI_loop```. These functions are expected to be called at test time and will iterate over the full dataset to compute the corresponding statistics. It is recommended to implement new statistics tracking in a functional way similiarly.
 
-Model certification is done via a combination of IBP (fastest), PGD attack (fast) / autoattack (slow), alpha-CROWN incomplete bounds, and Branch-and-Bound complete verification via [alpha-beta-CROWN](https://github.com/Verified-Intelligence/alpha-beta-CROWN). This is implemented in ```abcrown_certify.py``` with a lightweight adapter (```abcrown_adapter.py```) bridging CTBench models and data to the alpha-beta-CROWN interface. For most cases (except when a new certification method is designed), it is recommended to **not** change these files at all.
+Model certification is done via a combination of IBP (fastest), optional AutoAttack for external adversarial accuracy, alpha-CROWN incomplete bounds, and Branch-and-Bound complete verification via [alpha-beta-CROWN](https://github.com/Verified-Intelligence/alpha-beta-CROWN). This is implemented in ```abcrown_certify.py``` with a lightweight adapter (```abcrown_adapter.py```) bridging CTBench models and data to the alpha-beta-CROWN interface. For most cases (except when a new certification method is designed), it is recommended to **not** change these files at all.
 
 Unit tests are included in ```Utility/test_functions.py``` and can be invoked via ```cd Utility; python test_functions.py; cd ..```. Note that these tests are not complete but serves as a minimal check. Make sure to include new unit tests for new `model wrapper`.
 
@@ -102,6 +102,21 @@ For example, to run full certification with alpha-beta-CROWN:
     --abcrown-config abCROWN_configs/cifar10_eps2.255.yaml --test-batch 16 
 ```
 
+To follow the recommended separated attack reporting flow, install AutoAttack in the environment:
+```bash
+pip install git+https://github.com/fra31/auto-attack
+```
+
+Then run AutoAttack before alpha-beta-CROWN and disable alpha-beta-CROWN's internal PGD:
+```bash
+./run_parallel_abcrown.sh --dataset cifar10 --net cnn_7layer_bn \
+    --load-model ./CTBenchRelease/cifar10/2.255/TAPS/model.ckpt \
+    --abcrown-config abCROWN_configs/cifar10_eps2.255.yaml \
+    --test-batch 128 --attack-batch 128 --abcrown-batch 16 \
+    --enable-heuristic-dpb --use-autoattack --disable-abcrown-pgd
+```
+Here ```--test-batch``` controls the outer CTBench batch size, ```--attack-batch``` controls AutoAttack's internal batch size, and ```--abcrown-batch``` controls alpha-beta-CROWN's solver batch size. For long runs where verifier errors (for example OOMs) should be treated as unknown samples instead of stopping the run, add ```--tolerate-error```.
+
 To run IBP + heuristic DeepPoly only (no alpha-beta-CROWN):
 ```bash
 ./run_parallel_abcrown.sh --dataset cifar10 --net cnn_7layer_bn \
@@ -123,7 +138,8 @@ Completed shards with ```complete_cert_<start>_<end>.json``` are copied to the o
 The certification pipeline automatically performs the following cascade:
 1. **IBP verification** (fastest) — certifies easy samples via interval arithmetic.
 2. **Heuristic DeepPoly** (optional) — enabled via the ```--enable-heuristic-dpb``` flag.
-3. **alpha-beta-CROWN** — for remaining samples, delegates to the verifier which natively handles PGD attacks, alpha-CROWN incomplete bounds, and beta-CROWN complete verification.
+3. **AutoAttack** (optional) — enabled via ```--use-autoattack``` and reported separately as external adversarial accuracy.
+4. **alpha-beta-CROWN** — for remaining samples, delegates to the verifier for alpha-CROWN incomplete bounds and beta-CROWN complete verification. Its internal PGD can be disabled via ```--disable-abcrown-pgd```; if enabled, the resulting ```unsafe-pgd``` count is reported separately from AutoAttack.
 
 Pre-built YAML configuration files are provided in ```./abCROWN_configs``` for all standard benchmark settings. Key parameters (epsilon, batch size, model/data paths) are automatically injected at runtime.
 
