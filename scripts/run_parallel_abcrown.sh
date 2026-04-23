@@ -1,5 +1,8 @@
 #!/bin/bash
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
 # Dynamic GPU allocation
 # Uses GPUs specified by CUDA_VISIBLE_DEVICES if set, otherwise auto-detects all available GPUs.
 if [ -z "$CUDA_VISIBLE_DEVICES" ]; then
@@ -18,7 +21,10 @@ fi
 DATASET=""
 SAVE_DIR=""
 LOAD_MODEL=""
+USER_START_IDX=""
+USER_END_IDX=""
 args=("$@")
+PASSTHROUGH_ARGS=()
 
 for ((i=0; i<${#args[@]}; i++)); do
     if [[ "${args[$i]}" == "--dataset" ]]; then
@@ -30,6 +36,17 @@ for ((i=0; i<${#args[@]}; i++)); do
     if [[ "${args[$i]}" == "--load-model" ]]; then
         LOAD_MODEL="${args[$i+1]}"
     fi
+    if [[ "${args[$i]}" == "--start-idx" ]]; then
+        USER_START_IDX="${args[$i+1]}"
+        ((i++))
+        continue
+    fi
+    if [[ "${args[$i]}" == "--end-idx" ]]; then
+        USER_END_IDX="${args[$i+1]}"
+        ((i++))
+        continue
+    fi
+    PASSTHROUGH_ARGS+=("${args[$i]}")
 done
 
 # Default log directory: --save-dir if given, otherwise the model checkpoint's directory
@@ -53,7 +70,7 @@ echo "Running certification across $CHUNKS GPUs (${GPUS[*]})..."
 
 # Pre-download dataset to avoid race conditions when multiple GPU processes start simultaneously
 echo "Pre-downloading dataset '$DATASET' if needed..."
-TOTAL_SAMPLES=$(python3 -c "
+TOTAL_SAMPLES=$(cd "$REPO_ROOT" && python3 -c "
 import os, sys, torchvision, torchvision.transforms as T
 ds = '$DATASET'
 if ds == 'cifar10':
@@ -77,27 +94,56 @@ print(f'{ds} dataset ready (test size: {len(test_set)})', file=sys.stderr)
 print(len(test_set))
 ")
 echo "Dataset pre-download complete. Test set size: $TOTAL_SAMPLES"
-CHUNK_SIZE=$((TOTAL_SAMPLES / CHUNKS))
+
+if [ -z "$USER_START_IDX" ]; then
+    EFFECTIVE_START=0
+else
+    EFFECTIVE_START=$USER_START_IDX
+fi
+
+if [ -z "$USER_END_IDX" ] || [ "$USER_END_IDX" -eq -1 ]; then
+    EFFECTIVE_END=$TOTAL_SAMPLES
+else
+    EFFECTIVE_END=$USER_END_IDX
+fi
+
+if [ "$EFFECTIVE_START" -lt 0 ]; then
+    echo "Error: --start-idx must be non-negative."
+    exit 1
+fi
+
+if [ "$EFFECTIVE_END" -le "$EFFECTIVE_START" ] || [ "$EFFECTIVE_END" -gt "$TOTAL_SAMPLES" ]; then
+    echo "Error: effective range [$EFFECTIVE_START, $EFFECTIVE_END) is invalid for dataset size $TOTAL_SAMPLES."
+    exit 1
+fi
+
+RANGE_SIZE=$((EFFECTIVE_END - EFFECTIVE_START))
+CHUNK_SIZE=$(((RANGE_SIZE + CHUNKS - 1) / CHUNKS))
 
 PIDS=()
+LAUNCHED=0
 for i in "${!GPUS[@]}"; do
-    START=$((i * CHUNK_SIZE))
-    END=$(((i + 1) * CHUNK_SIZE))
-    # Ensure the last chunk covers everything
-    if [ $i -eq $((CHUNKS - 1)) ]; then END=$TOTAL_SAMPLES; fi
-    
+    START=$((EFFECTIVE_START + i * CHUNK_SIZE))
+    END=$((START + CHUNK_SIZE))
+    if [ "$END" -gt "$EFFECTIVE_END" ]; then END=$EFFECTIVE_END; fi
+    if [ "$START" -ge "$EFFECTIVE_END" ]; then break; fi
+
     GPU=${GPUS[$i]}
-    
+
     echo "  [GPU $GPU] Samples $START to $END"
-    
-    CUDA_VISIBLE_DEVICES=$GPU python3 abcrown_certify.py \
-        "$@" \
-        --start-idx "$START" \
-        --end-idx "$END" > "$SAVE_DIR/log_${START}_${END}.txt" 2>&1 &
+
+    (
+        cd "$REPO_ROOT" && \
+        CUDA_VISIBLE_DEVICES=$GPU python3 abcrown_certify.py \
+            "${PASSTHROUGH_ARGS[@]}" \
+            --start-idx "$START" \
+            --end-idx "$END"
+    ) > "$SAVE_DIR/log_${START}_${END}.txt" 2>&1 &
     PIDS+=($!)
+    LAUNCHED=$((LAUNCHED + 1))
 done
 
-echo "Launched parallel processes."
+echo "Launched $LAUNCHED parallel process(es) over [$EFFECTIVE_START, $EFFECTIVE_END)."
 
 FAILED=0
 for pid in "${PIDS[@]}"; do

@@ -32,6 +32,16 @@ except:
     neptune = None
 nep_log = None # A global variable to store neptune log
 
+
+def _initialize_neptune(args):
+    global nep_log, neptune
+    if args.enable_neptune:
+        assert neptune is not None, "Neptune is not installed."
+        nep_log = neptune.init_run(project=args.neptune_project, tags=args.neptune_tags)
+    else:
+        neptune = None
+
+
 def update_perf(save_root, args, num_cert_ibp, num_nat_accu, num_heuristic_dpb, num_alpha_crown, num_abcrown_bab, num_total, num_autoattack_attacked, num_abcrown_pgd_attacked, num_bab_rejected, is_nat_cert_accurate, certify_start_time, previous_time, batch_idx, test_loader, postfix="", end_idx=math.inf):
     num_external_attacked = num_autoattack_attacked
     num_internal_attacked = num_abcrown_pgd_attacked
@@ -89,15 +99,8 @@ def update_perf(save_root, args, num_cert_ibp, num_nat_accu, num_heuristic_dpb, 
 
     return perf_dict
 
-def run(args):
-    # neptune logging
-    global nep_log, neptune
-    if args.enable_neptune:
-        assert neptune is not None, "Neptune is not installed."
-        nep_log = neptune.init_run(project=args.neptune_project, tags=args.neptune_tags)
-    else:
-        neptune = None
 
+def _setup_runtime(args):
     seed_everything(args.random_seed, strict=True)
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
@@ -151,12 +154,23 @@ def run(args):
     if enable_heuristic_dpb:
         print("Heuristic DeepPoly evaluation is ENABLED.")
 
-    # parse the start and end of the certify loop (must happen before resume logic)
-    assert args.start_idx >= 0, "Start index must be a non-negative integer."
-    assert args.end_idx == -1 or args.end_idx>args.start_idx, "End index must be larger than start index or -1."
-    postfix = "" if args.start_idx==0 and args.end_idx==-1 else f"_{args.start_idx}_{args.end_idx}"
+    return {
+        "device": device,
+        "save_root": save_root,
+        "test_loader": test_loader,
+        "torch_net": torch_net,
+        "model_wrapper": model_wrapper,
+        "eps": eps,
+        "enable_heuristic_dpb": enable_heuristic_dpb,
+        "abcrown_yaml": abcrown_yaml,
+        "abcrown_artifacts": None,
+    }
 
-    # --- Resume logic: early exit for completed shards ---
+
+def _prepare_resume(args, save_root, postfix):
+    assert args.start_idx >= 0, "Start index must be a non-negative integer."
+    assert args.end_idx == -1 or args.end_idx > args.start_idx, "End index must be larger than start index or -1."
+
     certify_file_to_load = None
     if args.load_certify_directory:
         resume_dir = args.load_certify_directory
@@ -165,8 +179,7 @@ def run(args):
         if os.path.isfile(complete_path):
             shard_label = f"[{args.start_idx}, {args.end_idx})" if postfix else "full"
             copy_certify_artifacts(resume_dir, save_root, postfix, complete=True)
-            print(f"INFO: Shard {shard_label} already complete ({complete_path}), skipping.")
-            return
+            return {"skip": True, "message": f"INFO: Shard {shard_label} already complete ({complete_path}), skipping."}
         elif os.path.isfile(partial_path):
             copy_certify_artifacts(resume_dir, save_root, postfix, complete=False)
             certify_file_to_load = partial_path
@@ -177,17 +190,11 @@ def run(args):
         if not os.path.isfile(certify_file_to_load):
             certify_file_to_load = None
 
-    # Prepare alpha-beta-CROWN configurations once (only if abcrown is enabled)
-    if not args.disable_abcrown:
-        model_path, yaml_tmp_path = prepare_abcrown_config(torch_net, abcrown_yaml, args, device)
-    
-    # prepare statistics
     num_cert_ibp, num_nat_accu, num_heuristic_dpb, num_alpha_crown, num_abcrown_bab, num_total = 0, 0, 0, 0, 0, 0
     num_autoattack_attacked, num_abcrown_pgd_attacked, num_bab_rejected = 0, 0, 0
     previous_time = 0
     is_nat_cert_accurate = []
 
-    # --- Resume logic: load partial state ---
     if certify_file_to_load is not None:
         perf_dict = load_perf_from_json(os.path.dirname(certify_file_to_load), os.path.basename(certify_file_to_load))
         if perf_dict is not None:
@@ -222,9 +229,48 @@ def run(args):
     if num_total > 0:
         assert num_nat_accu == sum([int(i[0]) for i in is_nat_cert_accurate]) and temp_total_certified == sum([int(i[1]) for i in is_nat_cert_accurate]), "The loaded certify file is not consistent. This suggests corruption or manual modification. Please check the file and remove it if necessary."
 
-    # the range considered is [start_idx, end_idx)
-    current_start_idx = args.start_idx + num_total
-    current_end_idx = args.end_idx if args.end_idx != -1 else math.inf
+    return {
+        "skip": False,
+        "certify_file_to_load": certify_file_to_load,
+        "num_cert_ibp": num_cert_ibp,
+        "num_nat_accu": num_nat_accu,
+        "num_heuristic_dpb": num_heuristic_dpb,
+        "num_alpha_crown": num_alpha_crown,
+        "num_abcrown_bab": num_abcrown_bab,
+        "num_total": num_total,
+        "num_autoattack_attacked": num_autoattack_attacked,
+        "num_abcrown_pgd_attacked": num_abcrown_pgd_attacked,
+        "num_bab_rejected": num_bab_rejected,
+        "previous_time": previous_time,
+        "is_nat_cert_accurate": is_nat_cert_accurate,
+        "current_start_idx": args.start_idx + num_total,
+        "current_end_idx": args.end_idx if args.end_idx != -1 else math.inf,
+    }
+
+
+def _run_certification_loop(args, runtime, resume_state, postfix):
+    save_root = runtime["save_root"]
+    test_loader = runtime["test_loader"]
+    model_wrapper = runtime["model_wrapper"]
+    torch_net = runtime["torch_net"]
+    device = runtime["device"]
+    eps = runtime["eps"]
+    enable_heuristic_dpb = runtime["enable_heuristic_dpb"]
+
+    num_cert_ibp = resume_state["num_cert_ibp"]
+    num_nat_accu = resume_state["num_nat_accu"]
+    num_heuristic_dpb = resume_state["num_heuristic_dpb"]
+    num_alpha_crown = resume_state["num_alpha_crown"]
+    num_abcrown_bab = resume_state["num_abcrown_bab"]
+    num_total = resume_state["num_total"]
+    num_autoattack_attacked = resume_state["num_autoattack_attacked"]
+    num_abcrown_pgd_attacked = resume_state["num_abcrown_pgd_attacked"]
+    num_bab_rejected = resume_state["num_bab_rejected"]
+    previous_time = resume_state["previous_time"]
+    is_nat_cert_accurate = resume_state["is_nat_cert_accurate"]
+    current_start_idx = resume_state["current_start_idx"]
+    current_end_idx = resume_state["current_end_idx"]
+    certify_file_to_load = resume_state["certify_file_to_load"]
 
     # Truncate the abcrown log file at the start of a fresh run (append mode is used per-subprocess)
     # On resume, keep existing logs so prior subprocess output is preserved
@@ -333,8 +379,23 @@ def run(args):
         else:
             print("Warning: No samples were processed in the given range.")
 
+def run(args):
+    _initialize_neptune(args)
+    runtime = _setup_runtime(args)
+    postfix = "" if args.start_idx == 0 and args.end_idx == -1 else f"_{args.start_idx}_{args.end_idx}"
+    resume_state = _prepare_resume(args, runtime["save_root"], postfix)
+    if resume_state["skip"]:
+        print(resume_state["message"])
+        return
+
     if not args.disable_abcrown:
-        for temp_created_path in [model_path, yaml_tmp_path]:
+        model_path, yaml_tmp_path = prepare_abcrown_config(runtime["torch_net"], runtime["abcrown_yaml"], args, runtime["device"])
+        runtime["abcrown_artifacts"] = {"model_path": model_path, "yaml_tmp_path": yaml_tmp_path}
+
+    _run_certification_loop(args, runtime, resume_state, postfix)
+
+    if not args.disable_abcrown:
+        for temp_created_path in runtime["abcrown_artifacts"].values():
             if os.path.exists(temp_created_path):
                 try:
                     os.remove(temp_created_path)

@@ -93,11 +93,11 @@ The unified environment is intended to run both CTBench training and alpha-beta-
 
 First, install alpha-beta-CROWN according to the instructions at `https://github.com/Verified-Intelligence/alpha-beta-CROWN`. Ensure it is located at `../alpha-beta-CROWN` relative to the CTBench workspace root. The certification subprocess invokes `conda run -n unified_ctbench` by default, matching the environment created from `environment.yaml`; use ```--abcrown-conda-env``` to override the environment name.
 
-Certify your models with the parallel wrapper script ```./run_parallel_abcrown.sh```, which distributes evaluation across multiple GPUs. All arguments are passed as named flags and forwarded to ```abcrown_certify.py```. Logs are saved to the ```--save-dir``` directory if provided, otherwise to the model checkpoint's directory.
+Certify your models with the parallel wrapper script ```./scripts/run_parallel_abcrown.sh```, which distributes evaluation across multiple GPUs. All arguments are passed as named flags and forwarded to ```abcrown_certify.py```. If ```--start-idx``` and ```--end-idx``` are provided, the script shards only that subrange; otherwise it shards the full test set. Logs are saved to the ```--save-dir``` directory if provided, otherwise to the model checkpoint's directory.
 
 For example, to run full certification with alpha-beta-CROWN:
 ```bash
-./run_parallel_abcrown.sh --dataset cifar10 --net cnn_7layer_bn \
+./scripts/run_parallel_abcrown.sh --dataset cifar10 --net cnn_7layer_bn \
     --load-model ./CTBenchRelease/cifar10/2.255/TAPS/model.ckpt \
     --abcrown-config abCROWN_configs/cifar10_eps2.255.yaml --test-batch 16 
 ```
@@ -109,7 +109,7 @@ pip install git+https://github.com/fra31/auto-attack
 
 Then run AutoAttack before alpha-beta-CROWN and disable alpha-beta-CROWN's internal PGD:
 ```bash
-./run_parallel_abcrown.sh --dataset cifar10 --net cnn_7layer_bn \
+./scripts/run_parallel_abcrown.sh --dataset cifar10 --net cnn_7layer_bn \
     --load-model ./CTBenchRelease/cifar10/2.255/TAPS/model.ckpt \
     --abcrown-config abCROWN_configs/cifar10_eps2.255.yaml \
     --test-batch 128 --attack-batch 128 --abcrown-batch 16 \
@@ -119,7 +119,7 @@ Here ```--test-batch``` controls the outer CTBench batch size, ```--attack-batch
 
 To run IBP + heuristic DeepPoly only (no alpha-beta-CROWN):
 ```bash
-./run_parallel_abcrown.sh --dataset cifar10 --net cnn_7layer_bn \
+./scripts/run_parallel_abcrown.sh --dataset cifar10 --net cnn_7layer_bn \
     --load-model ./CTBenchRelease/cifar10/2.255/TAPS/model.ckpt \
     --test-eps 0.00784313725 --test-batch 16 \
     --disable-abcrown --enable-heuristic-dpb
@@ -127,7 +127,7 @@ To run IBP + heuristic DeepPoly only (no alpha-beta-CROWN):
 
 To resume an interrupted parallel certification run, pass the previous output directory to ```--load-certify-directory```. You may reuse the same directory as ```--save-dir```, or write resumed outputs to a new directory for safety:
 ```bash
-./run_parallel_abcrown.sh --dataset cifar10 --net cnn_7layer_bn \
+./scripts/run_parallel_abcrown.sh --dataset cifar10 --net cnn_7layer_bn \
     --load-model ./CTBenchRelease/cifar10/2.255/TAPS/model.ckpt \
     --abcrown-config abCROWN_configs/cifar10_eps2.255.yaml --test-batch 16 \
     --load-certify-directory ./results/cifar10_eps2.255_taps \
