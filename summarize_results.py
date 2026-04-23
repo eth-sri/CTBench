@@ -32,9 +32,25 @@ def aggregate(results_dir):
         return
 
     print(f"\nDiscovered {len(chosen_files)} result file(s). Aggregating...\n")
-    print(f"{'':36} {'':10} {'':>6} {'':>7} {'--- Certified (Safe) ---':^27} {'':>2} {'----- Unsafe -----':^21} {'':>8} {'':>9}")
-    print(f"{'File':<36} {'Status':<10} {'Total':>6} {'NatAcc':>7} {'IBP':>5} {'DPB':>5} {'a-CROWN':>8} {'BaB':>5} {'':>2} {'AA':>5} {'aPGD':>5} {'Reject':>7} {'Unknown':>8} {'CertRate':>9}")
-    print("-" * 143)
+    header = f"{'File':<36} {'Status':<10} {'Total':>6} {'NatAcc':>7} {'IBP':>5} {'DPoly':>5} {'alpha':>7} {'beta':>5} {'':>2} {'AA':>5} {'PGD':>5} {'betaU':>6} {'Unknown':>8} {'CertRate':>9}"
+    row_width = len(header)
+    group_header = [" "] * row_width
+
+    def place_group(label, start, end):
+        text = f"--- {label} ---"
+        offset = start + max((end - start - len(text)) // 2, 0)
+        group_header[offset:offset + len(text)] = text
+
+    safe_start = header.index("IBP")
+    safe_end = header.index("beta") + len("beta")
+    unsafe_start = header.index("AA")
+    unsafe_end = header.index("betaU") + len("betaU")
+    place_group("Certified (Safe)", safe_start, safe_end)
+    place_group("Unsafe", unsafe_start, unsafe_end)
+
+    print("".join(group_header).rstrip())
+    print(header)
+    print("-" * row_width)
 
     totals = {
         "num_total": 0,
@@ -90,7 +106,7 @@ def aggregate(results_dir):
         totals['num_abcrown_pgd_attacked'] += t_abcrown_pgd
         totals['num_bab_rejected'] += t_rej
 
-    print("-" * 143)
+    print("-" * row_width)
     total = totals["num_total"]
     if total == 0:
         print("No images processed yet.")
@@ -118,16 +134,16 @@ def aggregate(results_dir):
     print(f"  [1] Certified (Safe)    : {cert_total:>{n_width}} ({cert_total/total*100:>{p_width}.2f}%)")
     print(f"      - IBP               : {totals['num_cert_ibp']:>{n_width}} ({totals['num_cert_ibp']/total*100:>{p_width}.2f}%)")
     print(f"      - DeepPoly          : {totals['num_heuristic_dpb']:>{n_width}} ({totals['num_heuristic_dpb']/total*100:>{p_width}.2f}%)")
-    print(f"      - abcrown(alpha)    : {totals['num_cert_alpha_crown']:>{n_width}} ({totals['num_cert_alpha_crown']/total*100:>{p_width}.2f}%)")
-    print(f"      - abcrown(beta)     : {totals['num_cert_abcrown']:>{n_width}} ({totals['num_cert_abcrown']/total*100:>{p_width}.2f}%)")
+    print(f"      - alpha-CROWN       : {totals['num_cert_alpha_crown']:>{n_width}} ({totals['num_cert_alpha_crown']/total*100:>{p_width}.2f}%)")
+    print(f"      - b-CROWN           : {totals['num_cert_abcrown']:>{n_width}} ({totals['num_cert_abcrown']/total*100:>{p_width}.2f}%)")
     print()
     if autoattack_adv_acc is not None:
         print(f"  [2] AutoAttack adv acc  : {autoattack_correct:>{n_width}} / {total} ({autoattack_adv_acc:>{p_width}.2f}%)")
         print(f"      - AutoAttack found  : {autoattack_total:>{n_width}} ({autoattack_total/total*100:>{p_width}.2f}%)")
         print()
     print(f"  [3] Verifier unsafe     : {verifier_unsafe_total:>{n_width}} ({verifier_unsafe_total/total*100:>{p_width}.2f}%)")
-    print(f"      - abCROWN PGD       : {abcrown_pgd_total:>{n_width}} ({abcrown_pgd_total/total*100:>{p_width}.2f}%)")
-    print(f"      - BaB rejected      : {rej_total:>{n_width}} ({rej_total/total*100:>{p_width}.2f}%)")
+    print(f"      - PGD               : {abcrown_pgd_total:>{n_width}} ({abcrown_pgd_total/total*100:>{p_width}.2f}%)")
+    print(f"      - b-CROWN unsafe    : {rej_total:>{n_width}} ({rej_total/total*100:>{p_width}.2f}%)")
     print()
     print(f"  [4] Unknown             : {unknown_total:>{n_width}} ({unknown_total/total*100:>{p_width}.2f}%)")
     print(f"{'─'*55}")

@@ -24,7 +24,7 @@ The main training logic is implemented in ```mix_train.py```. For most cases, tr
 
 Tracking statistics of checkpoints is implemented in ```get_stat.py``` in the form of ```{stat}_loop```, e.g., ```relu_loop``` and ```PI_loop```. These functions are expected to be called at test time and will iterate over the full dataset to compute the corresponding statistics. It is recommended to implement new statistics tracking in a functional way similiarly.
 
-Model certification is done via a combination of IBP (fastest), optional AutoAttack for external adversarial accuracy, alpha-CROWN incomplete bounds, and Branch-and-Bound complete verification via [alpha-beta-CROWN](https://github.com/Verified-Intelligence/alpha-beta-CROWN). This is implemented in ```abcrown_certify.py``` with a lightweight adapter (```abcrown_adapter.py```) bridging CTBench models and data to the alpha-beta-CROWN interface. For most cases (except when a new certification method is designed), it is recommended to **not** change these files at all.
+Model certification is done via a combination of IBP (fastest), optional AutoAttack for external adversarial accuracy, alpha-CROWN incomplete bounds, and Branch-and-Bound complete verification via [alpha-beta-CROWN](https://github.com/Verified-Intelligence/alpha-beta-CROWN). This is implemented in ```abcrown_certify.py``` with a lightweight adapter (```abcrown_adapter.py```) bridging CTBench models and data to the alpha-beta-CROWN interface, and helper utilities in ```abcrown_utils.py```. For most cases (except when a new certification method is designed), it is recommended to **not** change these files at all.
 
 Unit tests are included in ```Utility/test_functions.py``` and can be invoked via ```cd Utility; python test_functions.py; cd ..```. Note that these tests are not complete but serves as a minimal check. Make sure to include new unit tests for new `model wrapper`.
 
@@ -91,7 +91,7 @@ The unified environment is intended to run both CTBench training and alpha-beta-
 
 ## Certification
 
-First, install alpha-beta-CROWN according to the instructions at `https://github.com/Verified-Intelligence/alpha-beta-CROWN`. Ensure it is located at `../alpha-beta-CROWN` relative to the CTBench workspace root. The certification subprocess invokes `conda run -n unified_ctbench`, matching the environment created from `environment.yaml`.
+First, install alpha-beta-CROWN according to the instructions at `https://github.com/Verified-Intelligence/alpha-beta-CROWN`. Ensure it is located at `../alpha-beta-CROWN` relative to the CTBench workspace root. The certification subprocess invokes `conda run -n unified_ctbench` by default, matching the environment created from `environment.yaml`; use ```--abcrown-conda-env``` to override the environment name.
 
 Certify your models with the parallel wrapper script ```./run_parallel_abcrown.sh```, which distributes evaluation across multiple GPUs. All arguments are passed as named flags and forwarded to ```abcrown_certify.py```. Logs are saved to the ```--save-dir``` directory if provided, otherwise to the model checkpoint's directory.
 

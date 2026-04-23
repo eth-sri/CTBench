@@ -182,6 +182,7 @@ def get_args(include:Iterable=["basic", "train", "cert"]):
         parser.add_argument('--load-certify-directory', default=None, type=str, help='Directory to auto-resume certification from. Looks for cert{postfix}.json / complete_cert{postfix}.json based on --start-idx and --end-idx. If complete, copies the completed shard to --save-dir when needed and skips it; if partial, resumes; if absent, starts fresh.')
         parser.add_argument('--timeout', default=1000, type=float, help='the time limit for certifying one label.')
         parser.add_argument('--abcrown-config', default=None, type=str, help='the config file for alpha-beta-CROWN (a YAML file in abCROWN_configs/).')
+        parser.add_argument('--abcrown-conda-env', default='unified_ctbench', type=str, help='Conda environment used for the alpha-beta-CROWN subprocess.')
         parser.add_argument('--enable-heuristic-dpb', action='store_true', help='Whether to calculate heuristic deeppoly before moving on to alpha-CROWN.')
         parser.add_argument('--use-autoattack', action='store_true', help='Whether to run AutoAttack before alpha-beta-CROWN and report it as the external adversarial accuracy.')
         parser.add_argument('--autoattack-version', default='standard', type=str, help='AutoAttack version passed to AutoAttack, e.g. standard or plus.')
