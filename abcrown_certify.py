@@ -53,9 +53,8 @@ def _resolve_save_root(args):
 
 
 def update_perf(save_root, args, num_cert_ibp, num_nat_accu, num_heuristic_dpb, num_alpha_crown, num_abcrown_bab, num_total, num_autoattack_attacked, num_abcrown_pgd_attacked, num_bab_rejected, is_nat_cert_accurate, certify_start_time, previous_time, batch_idx, test_loader, postfix="", end_idx=math.inf):
-    num_external_attacked = num_autoattack_attacked
-    num_internal_attacked = num_abcrown_pgd_attacked
-    num_unsafe = num_external_attacked + num_internal_attacked + num_bab_rejected
+    num_attack_attacked = num_autoattack_attacked + num_abcrown_pgd_attacked
+    num_unsafe = num_attack_attacked + num_bab_rejected
     has_autoattack = getattr(args, "use_autoattack", False) or num_autoattack_attacked > 0
     perf_dict = {
         'num_cert_ibp':num_cert_ibp,
@@ -65,17 +64,16 @@ def update_perf(save_root, args, num_cert_ibp, num_nat_accu, num_heuristic_dpb, 
         'num_cert_abcrown':num_abcrown_bab,
         'num_undecided': num_nat_accu - num_unsafe - num_cert_ibp - num_heuristic_dpb - num_alpha_crown - num_abcrown_bab,
         'num_total':num_total,
-        'num_adv_attacked':num_external_attacked,
+        'num_adv_attacked':num_attack_attacked,
         'num_autoattack_attacked':num_autoattack_attacked,
         'num_abcrown_pgd_attacked':num_abcrown_pgd_attacked,
-        'num_abcrown_pgd_unsafe':num_abcrown_pgd_attacked,
         'num_bab_rejected':num_bab_rejected,
         'nat_accu': round(num_nat_accu / num_total * 100, 2) if num_total > 0 else 0,
         'ibp_cert_rate': round(num_cert_ibp / num_total * 100, 2) if num_total > 0 else 0,
         'heuristic_dpb_cert_rate': round(num_heuristic_dpb / num_total * 100, 2) if num_total > 0 else 0,
         'alpha_crown_cert_rate': round(num_alpha_crown / num_total * 100, 2) if num_total > 0 else 0,
         'abcrown_bab_cert_rate': round(num_abcrown_bab / num_total * 100, 2) if num_total > 0 else 0,
-        'adv_unattacked_rate': round((num_nat_accu - num_external_attacked) / num_total * 100, 2) if num_total > 0 else 0,
+        'adv_unattacked_rate': round((num_nat_accu - num_attack_attacked) / num_total * 100, 2) if num_total > 0 else 0,
         'autoattack_adv_accuracy': round((num_nat_accu - num_autoattack_attacked) / num_total * 100, 2) if num_total > 0 and has_autoattack else None,
         'abcrown_pgd_unsafe_rate': round(num_abcrown_pgd_attacked / num_total * 100, 2) if num_total > 0 else 0,
         "total_cert_rate": round((num_cert_ibp + num_heuristic_dpb + num_alpha_crown + num_abcrown_bab) / num_total * 100, 2) if num_total > 0 else 0,
@@ -93,7 +91,7 @@ def update_perf(save_root, args, num_cert_ibp, num_nat_accu, num_heuristic_dpb, 
         nep_log['num_cert_alpha_crown'].append(num_alpha_crown)
         nep_log['num_cert_abcrown'].append(num_abcrown_bab)
         nep_log['num_total'].append(num_total)
-        nep_log['num_adv_attacked'].append(num_external_attacked)
+        nep_log['num_adv_attacked'].append(num_attack_attacked)
         nep_log['num_autoattack_attacked'].append(num_autoattack_attacked)
         nep_log['num_abcrown_pgd_attacked'].append(num_abcrown_pgd_attacked)
         nep_log['nat_accu'].append(perf_dict['nat_accu'])
@@ -209,7 +207,7 @@ def _prepare_resume(args, save_root, postfix):
             num_abcrown_bab = perf_dict.get('num_cert_abcrown', 0)
             num_total = perf_dict.get('num_total', 0)
             if 'num_autoattack_attacked' in perf_dict or 'num_abcrown_pgd_attacked' in perf_dict:
-                num_autoattack_attacked = perf_dict.get('num_autoattack_attacked', perf_dict.get('num_adv_attacked', 0))
+                num_autoattack_attacked = perf_dict.get('num_autoattack_attacked', 0)
                 num_abcrown_pgd_attacked = perf_dict.get('num_abcrown_pgd_attacked', perf_dict.get('num_abcrown_pgd_unsafe', 0))
             else:
                 num_autoattack_attacked = 0

@@ -59,6 +59,15 @@ def summarize_file(results_dir, fpath, status):
     cert_args = load_cert_args(results_dir, fpath)
 
     is_legacy_mnbab = 'num_cert_mnbab' in data or 'mnbab_config' in cert_args
+    is_abcrown_result = (
+        not is_legacy_mnbab
+        and (
+            'abcrown_config' in cert_args
+            or 'num_cert_alpha_crown' in data
+            or 'num_cert_abcrown' in data
+            or 'num_bab_rejected' in data
+        )
+    )
     has_split_attacks = (
         'num_autoattack_attacked' in data
         or 'num_abcrown_pgd_attacked' in data
@@ -69,6 +78,9 @@ def summarize_file(results_dir, fpath, status):
     if has_split_attacks:
         num_autoattack_attacked = data.get('num_autoattack_attacked', 0)
         num_abcrown_pgd_attacked = data.get('num_abcrown_pgd_attacked', data.get('num_abcrown_pgd_unsafe', 0))
+    elif is_abcrown_result and use_autoattack:
+        num_autoattack_attacked = data.get('num_adv_attacked', 0)
+        num_abcrown_pgd_attacked = 0
     else:
         num_autoattack_attacked = 0
         num_abcrown_pgd_attacked = data.get('num_adv_attacked', 0)
@@ -112,6 +124,8 @@ def summarize_file(results_dir, fpath, status):
         "use_abcrown": use_abcrown,
         "use_abcrown_pgd": use_abcrown_pgd,
         "has_split_attacks": has_split_attacks,
+        "has_unsplit_abcrown_attack": is_abcrown_result and not has_split_attacks and num_abcrown_pgd_attacked > 0,
+        "has_unsplit_abcrown_autoattack": is_abcrown_result and not has_split_attacks and use_autoattack and num_autoattack_attacked > 0,
         "is_legacy_mnbab": is_legacy_mnbab,
         "has_legacy_unsafe": is_legacy_mnbab and not has_split_attacks and num_abcrown_pgd_attacked > 0,
         "has_mnbab_count": data.get('num_cert_mnbab', 0) > 0,
@@ -122,20 +136,34 @@ def update_totals(totals, stage_flags, shard):
     for key in totals:
         totals[key] += shard[key]
 
-    stage_flags["autoattack"] = stage_flags["autoattack"] or (shard["use_autoattack"] and shard["has_split_attacks"])
+    stage_flags["autoattack"] = stage_flags["autoattack"] or (
+        shard["use_autoattack"]
+        and (shard["has_split_attacks"] or shard["has_unsplit_abcrown_autoattack"])
+    )
     stage_flags["deep_poly"] = stage_flags["deep_poly"] or shard["enable_dpb"] or shard["num_heuristic_dpb"] > 0
     stage_flags["abcrown"] = stage_flags["abcrown"] or shard["use_abcrown"] or shard["num_cert_alpha_crown"] > 0
     stage_flags["abcrown_pgd"] = stage_flags["abcrown_pgd"] or shard["use_abcrown_pgd"] or shard["num_abcrown_pgd_attacked"] > 0
     stage_flags["mnbab"] = stage_flags["mnbab"] or shard["is_legacy_mnbab"] or shard["has_mnbab_count"]
     stage_flags["legacy_pgd"] = stage_flags["legacy_pgd"] or shard["has_legacy_unsafe"]
+    stage_flags["unsplit_abcrown_attack"] = stage_flags["unsplit_abcrown_attack"] or shard["has_unsplit_abcrown_attack"]
     stage_flags["attack_accuracy"] = stage_flags["attack_accuracy"] or (
-        shard["has_split_attacks"]
-        and (
-            shard["use_autoattack"]
-            or shard["use_abcrown_pgd"]
-            or shard["num_autoattack_attacked"] > 0
-            or shard["num_abcrown_pgd_attacked"] > 0
+        (
+            shard["has_split_attacks"]
+            and (
+                shard["use_autoattack"]
+                or shard["use_abcrown_pgd"]
+                or shard["num_autoattack_attacked"] > 0
+                or shard["num_abcrown_pgd_attacked"] > 0
+            )
         )
+        or (
+            shard["has_unsplit_abcrown_attack"]
+            and (
+                shard["use_abcrown_pgd"]
+                or shard["num_abcrown_pgd_attacked"] > 0
+            )
+        )
+        or shard["has_unsplit_abcrown_autoattack"]
     )
 
 
@@ -192,11 +220,15 @@ def print_final_summary(totals, stage_flags):
     print(f"      - IBP certified     : {totals['num_cert_ibp']:>{n_width}} ({totals['num_cert_ibp']/total*100:>{p_width}.2f}%)")
     if stage_flags["deep_poly"]:
         print(f"      - DeepPoly certified: {totals['num_heuristic_dpb']:>{n_width}} ({totals['num_heuristic_dpb']/total*100:>{p_width}.2f}%)")
+    attack_total = autoattack_total + abcrown_pgd_total
     if stage_flags["autoattack"]:
         print(f"      - AutoAttack unsafe : {autoattack_total:>{n_width}} ({autoattack_total/total*100:>{p_width}.2f}%)")
     if stage_flags["abcrown"]:
         if stage_flags["abcrown_pgd"]:
-            print(f"      - abCROWN PGD unsafe: {abcrown_pgd_total:>{n_width}} ({abcrown_pgd_total/total*100:>{p_width}.2f}%)")
+            if stage_flags["unsplit_abcrown_attack"]:
+                print(f"      - Attack unsafe     : {abcrown_pgd_total:>{n_width}} ({abcrown_pgd_total/total*100:>{p_width}.2f}%)")
+            else:
+                print(f"      - abCROWN PGD unsafe: {abcrown_pgd_total:>{n_width}} ({abcrown_pgd_total/total*100:>{p_width}.2f}%)")
         print(f"      - alpha-CROWN cert. : {totals['num_cert_alpha_crown']:>{n_width}} ({totals['num_cert_alpha_crown']/total*100:>{p_width}.2f}%)")
         print(f"      - beta-CROWN cert.  : {totals['num_cert_abcrown']:>{n_width}} ({totals['num_cert_abcrown']/total*100:>{p_width}.2f}%)")
         print(f"      - BaB unsafe/reject : {rej_total:>{n_width}} ({rej_total/total*100:>{p_width}.2f}%)")
@@ -215,8 +247,13 @@ def print_final_summary(totals, stage_flags):
         print(f"      - Certified (Safe)  : {cert_total:>{n_width}} / {nat_acc} ({cert_total/nat_acc*100:>{p_width}.2f}%)")
         if stage_flags["autoattack"]:
             print(f"      - AutoAttack found  : {autoattack_total:>{n_width}} / {nat_acc} ({autoattack_total/nat_acc*100:>{p_width}.2f}%)")
-        if stage_flags["abcrown_pgd"] or stage_flags["abcrown"]:
-            print(f"      - Verifier unsafe   : {verifier_unsafe_total:>{n_width}} / {nat_acc} ({verifier_unsafe_total/nat_acc*100:>{p_width}.2f}%)")
+        if stage_flags["abcrown_pgd"] and not stage_flags["legacy_pgd"]:
+            pgd_label = "Attack found" if stage_flags["unsplit_abcrown_attack"] else "abCROWN PGD found"
+            print(f"      - {pgd_label:<18}: {abcrown_pgd_total:>{n_width}} / {nat_acc} ({abcrown_pgd_total/nat_acc*100:>{p_width}.2f}%)")
+        if stage_flags["abcrown"]:
+            print(f"      - BaB unsafe/reject : {rej_total:>{n_width}} / {nat_acc} ({rej_total/nat_acc*100:>{p_width}.2f}%)")
+        elif stage_flags["mnbab"] or stage_flags["abcrown_pgd"]:
+            print(f"      - Unsafe            : {verifier_unsafe_total:>{n_width}} / {nat_acc} ({verifier_unsafe_total/nat_acc*100:>{p_width}.2f}%)")
         print(f"      - Unknown           : {unknown_total:>{n_width}} / {nat_acc} ({unknown_total/nat_acc*100:>{p_width}.2f}%)")
 
     print(f"{'='*55}\n")
@@ -246,6 +283,7 @@ def aggregate(results_dir):
         "abcrown_pgd": False,
         "mnbab": False,
         "legacy_pgd": False,
+        "unsplit_abcrown_attack": False,
         "attack_accuracy": False,
     }
 
