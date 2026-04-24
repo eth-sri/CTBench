@@ -116,7 +116,7 @@ For example, to run full certification with alpha-beta-CROWN:
 
 To follow the recommended separated attack reporting flow, install AutoAttack in your active environment (either the separated `CTBench` environment or the shared `unified_ctbench` environment):
 ```bash
-pip install git+[https://github.com/fra31/auto-attack](https://github.com/fra31/auto-attack)
+pip install git+https://github.com/fra31/auto-attack
 ```
 
 Then run AutoAttack before alpha-beta-CROWN and disable alpha-beta-CROWN's internal PGD:
