@@ -103,7 +103,7 @@ First, install alpha-beta-CROWN according to the instructions at `https://github
 ```console
 git clone https://github.com/Verified-Intelligence/alpha-beta-CROWN ../alpha-beta-CROWN
 ```
-The certification subprocess invokes `conda run -n unified_ctbench` by default, matching the optional reference environment above. When using separate CTBench and alpha-beta-CROWN environments, pass the verifier environment name with ```--abcrown-conda-env```.
+The certification subprocess invokes `conda run -n unified_ctbench` by default, matching the optional reference environment above. If you use separate CTBench and alpha-beta-CROWN environments, pass the verifier environment explicitly with `--abcrown-conda-env`.
 
 Certify your models with the parallel wrapper script ```./scripts/run_parallel_abcrown.sh```, which distributes evaluation across multiple GPUs. All arguments are passed as named flags and forwarded to ```abcrown_certify.py```. If ```--start-idx``` and ```--end-idx``` are provided, the script shards only that subrange; otherwise it shards the full test set. Logs are saved to the ```--save-dir``` directory if provided, otherwise to the model checkpoint's directory.
 
@@ -160,7 +160,15 @@ After certification completes, aggregate per-GPU results using:
 python summarize_results.py <results_directory>
 ```
 where `<results_directory>` is the `--save-dir` you specified, or the model checkpoint's directory if `--save-dir` was omitted (e.g., `./CTBenchRelease/cifar10/2.255/TAPS/`).
-For current abCROWN result files, the summary reports the staged pipeline from split fields: AutoAttack unsafe samples, verifier-internal PGD unsafe samples, BaB unsafe/rejected samples, and the individual certification counts. The stage breakdown keeps these buckets separate, while the high-level adversarial accuracy combines the attack-found unsafe counts from AutoAttack and verifier-internal PGD. Legacy MN-BaB result files are still supported and are summarized with their original aggregate unsafe bucket, so adversarial accuracy is not reported separately for those files.
+For abCROWN result files, the summary reports the staged certification pipeline directly from split fields:
+- external AutoAttack unsafe samples (`num_autoattack_attacked`)
+- verifier-internal PGD unsafe samples (`num_abcrown_pgd_attacked` / `num_abcrown_pgd_unsafe`)
+- BaB unsafe/rejected samples (`num_bab_rejected`)
+- individual certification counts
+
+The reported adversarial accuracy corresponds to the accuracy after removing attack-found unsafe samples (e.g. AutoAttack and/or verifier-internal PGD, depending on the enabled pipeline stages). BaB unsafe/rejected samples are reported separately as a verifier bucket and are not folded into this adversarial-accuracy metric.
+
+Legacy MN-BaB result files are still supported, but their combined `num_adv_attacked` / `adv_unattacked_rate` fields are treated as a coarse aggregate unsafe bucket rather than the main staged abCROWN summary breakdown.
 
 If a fast evaluation is desired, pass ```--dp-only``` to skip beta-CROWN and rely only on fast incomplete lower bounds (alpha-CROWN). Alternatively, use ```--disable-abcrown``` to skip alpha-beta-CROWN verification altogether (```--test-eps``` is required in this case, since there is no YAML config to read epsilon from).
 
