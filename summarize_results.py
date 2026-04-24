@@ -3,18 +3,41 @@ import os
 import json
 import glob
 
-def aggregate(results_dir):
+
+def extract_range(path):
+    base = os.path.basename(path)
+    base = base.replace("complete_cert", "").replace("cert", "").replace(".json", "")
+    parts = base.split("_")
+    return tuple(int(p) for p in parts if p)
+
+
+def load_cert_args(results_dir, result_path):
+    base = os.path.basename(result_path)
+    if base.startswith("complete_cert"):
+        args_base = base.replace("complete_cert", "cert_args", 1)
+    else:
+        args_base = base.replace("cert", "cert_args", 1)
+    args_path = os.path.join(results_dir, args_base)
+    if not os.path.isfile(args_path):
+        return {}
+    with open(args_path) as f:
+        return json.load(f)
+
+
+def choose_result_files(results_dir):
     pattern_partial = os.path.join(results_dir, "cert*.json")
     pattern_complete = os.path.join(results_dir, "complete_cert*.json")
 
     partial_files = sorted(f for f in glob.glob(pattern_partial) if "args" not in f and "complete_" not in os.path.basename(f))
     complete_files = sorted(glob.glob(pattern_complete))
 
-    def extract_range(path):
-        base = os.path.basename(path)
-        base = base.replace("complete_cert", "").replace("cert", "").replace(".json", "")
-        parts = base.split("_")
-        return tuple(int(p) for p in parts if p)
+    full_complete = os.path.join(results_dir, "complete_cert.json")
+    using_full_complete = os.path.isfile(full_complete)
+    ignored_shards = 0
+    if using_full_complete:
+        ignored_shards = len([f for f in complete_files if f != full_complete]) + len(partial_files)
+        complete_files = [full_complete]
+        partial_files = []
 
     complete_ranges = {extract_range(f): f for f in complete_files}
     partial_ranges = {extract_range(f): f for f in partial_files}
@@ -27,30 +50,183 @@ def aggregate(results_dir):
         else:
             chosen_files[r] = (partial_ranges[r], "partial")
 
+    return chosen_files, using_full_complete, ignored_shards
+
+
+def summarize_file(results_dir, fpath, status):
+    with open(fpath) as f:
+        data = json.load(f)
+    cert_args = load_cert_args(results_dir, fpath)
+
+    is_legacy_mnbab = 'num_cert_mnbab' in data or 'mnbab_config' in cert_args
+    has_split_attacks = (
+        'num_autoattack_attacked' in data
+        or 'num_abcrown_pgd_attacked' in data
+        or 'num_abcrown_pgd_unsafe' in data
+    )
+    use_autoattack = cert_args.get('use_autoattack', False)
+
+    if has_split_attacks:
+        num_autoattack_attacked = data.get('num_autoattack_attacked', 0)
+        num_abcrown_pgd_attacked = data.get('num_abcrown_pgd_attacked', data.get('num_abcrown_pgd_unsafe', 0))
+    else:
+        num_autoattack_attacked = 0
+        num_abcrown_pgd_attacked = data.get('num_adv_attacked', 0)
+
+    num_cert_alpha_crown = data.get('num_cert_alpha_crown', 0)
+    num_cert_abcrown = data.get('num_cert_abcrown', data.get('num_cert_mnbab', 0))
+    num_bab_rejected = data.get('num_bab_rejected', 0)
+    use_abcrown = (
+        not cert_args.get('disable_abcrown', False)
+        if cert_args and not is_legacy_mnbab
+        else (num_cert_alpha_crown + data.get('num_cert_abcrown', 0) + num_bab_rejected) > 0
+    )
+    use_abcrown_pgd = use_abcrown and not cert_args.get('disable_abcrown_pgd', False) if cert_args else num_abcrown_pgd_attacked > 0
+
+    num_total = data.get('num_total', 0)
+    num_nat_accu = data.get('num_nat_accu', 0)
+    num_cert_ibp = data.get('num_cert_ibp', 0)
+    num_heuristic_dpb = data.get('num_heuristic_dpb', data.get('num_cert_dpb', 0))
+    num_cert_sum = num_cert_ibp + num_heuristic_dpb + num_cert_alpha_crown + num_cert_abcrown
+    num_unsafe_sum = num_autoattack_attacked + num_abcrown_pgd_attacked + num_bab_rejected
+    num_unknown = max(0, num_nat_accu - num_cert_sum - num_unsafe_sum)
+
+    return {
+        "name": os.path.basename(fpath),
+        "status": status,
+        "num_total": num_total,
+        "num_nat_accu": num_nat_accu,
+        "num_cert_ibp": num_cert_ibp,
+        "num_heuristic_dpb": num_heuristic_dpb,
+        "num_cert_alpha_crown": num_cert_alpha_crown,
+        "num_cert_abcrown": num_cert_abcrown,
+        "num_autoattack_attacked": num_autoattack_attacked,
+        "num_abcrown_pgd_attacked": num_abcrown_pgd_attacked,
+        "num_bab_rejected": num_bab_rejected,
+        "num_cert_sum": num_cert_sum,
+        "num_unsafe_sum": num_unsafe_sum,
+        "num_unknown": num_unknown,
+        "total_cert_rate": data.get('total_cert_rate', 0.0),
+        "enable_dpb": cert_args.get('enable_heuristic_dpb', False),
+        "use_autoattack": use_autoattack,
+        "use_abcrown": use_abcrown,
+        "use_abcrown_pgd": use_abcrown_pgd,
+        "has_split_attacks": has_split_attacks,
+        "is_legacy_mnbab": is_legacy_mnbab,
+        "has_legacy_unsafe": is_legacy_mnbab and not has_split_attacks and num_abcrown_pgd_attacked > 0,
+        "has_mnbab_count": data.get('num_cert_mnbab', 0) > 0,
+    }
+
+
+def update_totals(totals, stage_flags, shard):
+    for key in totals:
+        totals[key] += shard[key]
+
+    stage_flags["autoattack"] = stage_flags["autoattack"] or (shard["use_autoattack"] and shard["has_split_attacks"])
+    stage_flags["deep_poly"] = stage_flags["deep_poly"] or shard["enable_dpb"] or shard["num_heuristic_dpb"] > 0
+    stage_flags["abcrown"] = stage_flags["abcrown"] or shard["use_abcrown"] or shard["num_cert_alpha_crown"] > 0
+    stage_flags["abcrown_pgd"] = stage_flags["abcrown_pgd"] or shard["use_abcrown_pgd"] or shard["num_abcrown_pgd_attacked"] > 0
+    stage_flags["mnbab"] = stage_flags["mnbab"] or shard["is_legacy_mnbab"] or shard["has_mnbab_count"]
+    stage_flags["legacy_pgd"] = stage_flags["legacy_pgd"] or shard["has_legacy_unsafe"]
+    stage_flags["attack_accuracy"] = stage_flags["attack_accuracy"] or (
+        shard["has_split_attacks"]
+        and (
+            shard["use_autoattack"]
+            or shard["use_abcrown_pgd"]
+            or shard["num_autoattack_attacked"] > 0
+            or shard["num_abcrown_pgd_attacked"] > 0
+        )
+    )
+
+
+def print_shard_table(shards, using_full_complete, ignored_shards):
+    print(f"\nDiscovered {len(shards)} result file(s). Aggregating...\n")
+    if using_full_complete and ignored_shards > 0:
+        print(f"Using complete_cert.json and ignoring {ignored_shards} shard/partial file(s) in the same directory.\n")
+
+    header = f"{'File':<36} {'Status':<10} {'Total':>6} {'NatAcc':>7} {'Cert':>6} {'Unsafe':>7} {'Unknown':>8} {'CertRate':>9}"
+    row_width = len(header)
+    print(header)
+    print("-" * row_width)
+
+    for shard in shards:
+        print(f"  {shard['name']:<34} [{shard['status']:<8}] {shard['num_total']:>6} "
+              f"{shard['num_nat_accu']:>7} {shard['num_cert_sum']:>6} {shard['num_unsafe_sum']:>7} {shard['num_unknown']:>8} "
+              f"{shard['total_cert_rate']:>8.1f}%")
+
+    print("-" * row_width)
+
+
+def print_final_summary(totals, stage_flags):
+    total = totals["num_total"]
+    if total == 0:
+        print("No images processed yet.")
+        return
+
+    cert_total = totals['num_cert_ibp'] + totals['num_heuristic_dpb'] + totals['num_cert_alpha_crown'] + totals['num_cert_abcrown']
+    nat_acc = totals["num_nat_accu"]
+    autoattack_total = totals["num_autoattack_attacked"]
+    abcrown_pgd_total = totals["num_abcrown_pgd_attacked"]
+    rej_total = totals["num_bab_rejected"]
+    verifier_unsafe_total = abcrown_pgd_total + rej_total
+    nat_misclassified = max(0, total - nat_acc)
+
+    unknown_total = max(0, nat_acc - cert_total - autoattack_total - verifier_unsafe_total)
+    attack_total = autoattack_total + abcrown_pgd_total
+    attack_adv_correct = nat_acc - attack_total
+    attack_adv_acc = attack_adv_correct / total * 100 if stage_flags["attack_accuracy"] else None
+
+    print(f"\n{'='*55}")
+    print(f"  FINAL AGGREGATE SUMMARY")
+    print(f"{'='*55}")
+    print(f"  Total images processed  : {total}")
+    print(f"  Natural accuracy        : {nat_acc} / {total}  ({nat_acc/total*100:.2f}%)")
+    print(f"  Certified accuracy      : {cert_total} / {total}  ({cert_total/total*100:.2f}%)")
+    if attack_adv_acc is not None:
+        print(f"  Adversarial accuracy    : {attack_adv_correct} / {total}  ({attack_adv_acc:.2f}%)")
+    print(f"{'-'*55}")
+    n_width = 5
+    p_width = 5
+    print(f"  Pipeline breakdown:")
+    print(f"      - Natural misclass. : {nat_misclassified:>{n_width}} ({nat_misclassified/total*100:>{p_width}.2f}%)")
+    print(f"      - IBP certified     : {totals['num_cert_ibp']:>{n_width}} ({totals['num_cert_ibp']/total*100:>{p_width}.2f}%)")
+    if stage_flags["deep_poly"]:
+        print(f"      - DeepPoly certified: {totals['num_heuristic_dpb']:>{n_width}} ({totals['num_heuristic_dpb']/total*100:>{p_width}.2f}%)")
+    if stage_flags["autoattack"]:
+        print(f"      - AutoAttack unsafe : {autoattack_total:>{n_width}} ({autoattack_total/total*100:>{p_width}.2f}%)")
+    if stage_flags["abcrown"]:
+        if stage_flags["abcrown_pgd"]:
+            print(f"      - abCROWN PGD unsafe: {abcrown_pgd_total:>{n_width}} ({abcrown_pgd_total/total*100:>{p_width}.2f}%)")
+        print(f"      - alpha-CROWN cert. : {totals['num_cert_alpha_crown']:>{n_width}} ({totals['num_cert_alpha_crown']/total*100:>{p_width}.2f}%)")
+        print(f"      - beta-CROWN cert.  : {totals['num_cert_abcrown']:>{n_width}} ({totals['num_cert_abcrown']/total*100:>{p_width}.2f}%)")
+        print(f"      - BaB unsafe/reject : {rej_total:>{n_width}} ({rej_total/total*100:>{p_width}.2f}%)")
+    elif stage_flags["mnbab"]:
+        print(f"      - MN-BaB certified  : {totals['num_cert_abcrown']:>{n_width}} ({totals['num_cert_abcrown']/total*100:>{p_width}.2f}%)")
+        if stage_flags["abcrown_pgd"]:
+            print(f"      - Unsafe            : {abcrown_pgd_total:>{n_width}} ({abcrown_pgd_total/total*100:>{p_width}.2f}%)")
+    elif stage_flags["abcrown_pgd"]:
+        print(f"      - Unsafe            : {abcrown_pgd_total:>{n_width}} ({abcrown_pgd_total/total*100:>{p_width}.2f}%)")
+    print(f"      - Unknown           : {unknown_total:>{n_width}} ({unknown_total/total*100:>{p_width}.2f}%)")
+    print(f"{'─'*55}")
+
+    # Calculate percentage relative to correctly classified images (Nat Acc)
+    if nat_acc > 0:
+        print(f"  Correctly classified breakdown:")
+        print(f"      - Certified (Safe)  : {cert_total:>{n_width}} / {nat_acc} ({cert_total/nat_acc*100:>{p_width}.2f}%)")
+        if stage_flags["autoattack"]:
+            print(f"      - AutoAttack found  : {autoattack_total:>{n_width}} / {nat_acc} ({autoattack_total/nat_acc*100:>{p_width}.2f}%)")
+        if stage_flags["abcrown_pgd"] or stage_flags["abcrown"]:
+            print(f"      - Verifier unsafe   : {verifier_unsafe_total:>{n_width}} / {nat_acc} ({verifier_unsafe_total/nat_acc*100:>{p_width}.2f}%)")
+        print(f"      - Unknown           : {unknown_total:>{n_width}} / {nat_acc} ({unknown_total/nat_acc*100:>{p_width}.2f}%)")
+
+    print(f"{'='*55}\n")
+
+
+def aggregate(results_dir):
+    chosen_files, using_full_complete, ignored_shards = choose_result_files(results_dir)
     if not chosen_files:
         print(f"No result files found in {results_dir}")
         return
-
-    print(f"\nDiscovered {len(chosen_files)} result file(s). Aggregating...\n")
-    header = f"{'File':<36} {'Status':<10} {'Total':>6} {'NatAcc':>7} {'IBP':>5} {'DPoly':>5} {'alpha':>8} {'beta':>5} {'':>3} {'AA':>5} {'PGD':>5} {'betaU':>7} {'Unknown':>8} {'CertRate':>9}"
-    row_width = len(header)
-    group_header = [" "] * row_width
-
-    def place_group(label, start, end):
-        text = f"--- {label} ---"
-        offset = start + max((end - start - len(text)) // 2, 0)
-        group_header[offset:offset + len(text)] = text
-
-    safe_start = header.index("IBP")
-    safe_end = header.index("beta") + len("beta")
-    unsafe_start = header.index("AA")
-    unsafe_end = header.index("betaU") + len("betaU")
-    place_group("Certified (Safe)", safe_start, safe_end)
-    place_group("Unsafe", unsafe_start, unsafe_end)
-
-    print("".join(group_header).rstrip())
-    print(header)
-    print("-" * row_width)
 
     totals = {
         "num_total": 0,
@@ -63,101 +239,24 @@ def aggregate(results_dir):
         "num_abcrown_pgd_attacked": 0,
         "num_bab_rejected": 0,
     }
-    autoattack_reported = False
+    stage_flags = {
+        "deep_poly": False,
+        "autoattack": False,
+        "abcrown": False,
+        "abcrown_pgd": False,
+        "mnbab": False,
+        "legacy_pgd": False,
+        "attack_accuracy": False,
+    }
 
+    shards = []
     for rng, (fpath, status) in sorted(chosen_files.items()):
-        with open(fpath) as f:
-            data = json.load(f)
+        shard = summarize_file(results_dir, fpath, status)
+        shards.append(shard)
+        update_totals(totals, stage_flags, shard)
 
-        name = os.path.basename(fpath)
-
-        # Get data from JSON
-        t_tot = data.get('num_total', 0)
-        t_nat = data.get('num_nat_accu', 0)
-        t_ibp = data.get('num_cert_ibp', 0)
-        t_heu_dpb = data.get('num_heuristic_dpb', data.get('num_cert_dpb', 0))
-        t_alpha = data.get('num_cert_alpha_crown', 0)
-        t_bab = data.get('num_cert_abcrown', 0)
-        has_split_attacks = (
-            'num_autoattack_attacked' in data
-            or 'num_abcrown_pgd_attacked' in data
-            or 'num_abcrown_pgd_unsafe' in data
-        )
-        t_autoattack = data.get('num_autoattack_attacked', 0)
-        t_abcrown_pgd = data.get('num_abcrown_pgd_attacked', data.get('num_abcrown_pgd_unsafe', 0 if has_split_attacks else data.get('num_adv_attacked', 0)))
-        t_rej = data.get('num_bab_rejected', 0)
-        autoattack_reported = autoattack_reported or data.get('autoattack_adv_accuracy') is not None or 'num_autoattack_attacked' in data
-
-        t_cert_sum = t_ibp + t_heu_dpb + t_alpha + t_bab
-        t_unknown = max(0, t_nat - t_cert_sum - t_autoattack - t_abcrown_pgd - t_rej)
-
-        print(f"  {name:<34} [{status:<8}] {t_tot:>6} "
-              f"{t_nat:>7} {t_ibp:>5} {t_heu_dpb:>5} {t_alpha:>8} {t_bab:>5} "
-              f"{'|':>3} {t_autoattack:>5} {t_abcrown_pgd:>5} {t_rej:>7} {t_unknown:>8} "
-              f"{data.get('total_cert_rate',0.0):>8.1f}%")
-
-        totals['num_total'] += t_tot
-        totals['num_nat_accu'] += t_nat
-        totals['num_cert_ibp'] += t_ibp
-        totals['num_heuristic_dpb'] += t_heu_dpb
-        totals['num_cert_alpha_crown'] += t_alpha
-        totals['num_cert_abcrown'] += t_bab
-        totals['num_autoattack_attacked'] += t_autoattack
-        totals['num_abcrown_pgd_attacked'] += t_abcrown_pgd
-        totals['num_bab_rejected'] += t_rej
-
-    print("-" * row_width)
-    total = totals["num_total"]
-    if total == 0:
-        print("No images processed yet.")
-        return
-
-    cert_total = totals['num_cert_ibp'] + totals['num_heuristic_dpb'] + totals['num_cert_alpha_crown'] + totals['num_cert_abcrown']
-    nat_acc = totals["num_nat_accu"]
-    autoattack_total = totals["num_autoattack_attacked"]
-    abcrown_pgd_total = totals["num_abcrown_pgd_attacked"]
-    rej_total = totals["num_bab_rejected"]
-    verifier_unsafe_total = abcrown_pgd_total + rej_total
-
-    unknown_total = max(0, nat_acc - cert_total - autoattack_total - verifier_unsafe_total)
-    autoattack_correct = nat_acc - autoattack_total
-    autoattack_adv_acc = autoattack_correct / total * 100 if autoattack_reported else None
-
-    print(f"\n{'='*55}")
-    print(f"  FINAL AGGREGATE SUMMARY")
-    print(f"{'='*55}")
-    print(f"  Total images processed  : {total}")
-    print(f"  Natural accuracy        : {nat_acc} / {total}  ({nat_acc/total*100:.2f}%)")
-    print(f"{'-'*55}")
-    n_width = 5
-    p_width = 5
-    print(f"  [1] Certified (Safe)    : {cert_total:>{n_width}} ({cert_total/total*100:>{p_width}.2f}%)")
-    print(f"      - IBP               : {totals['num_cert_ibp']:>{n_width}} ({totals['num_cert_ibp']/total*100:>{p_width}.2f}%)")
-    print(f"      - DeepPoly          : {totals['num_heuristic_dpb']:>{n_width}} ({totals['num_heuristic_dpb']/total*100:>{p_width}.2f}%)")
-    print(f"      - alpha-CROWN       : {totals['num_cert_alpha_crown']:>{n_width}} ({totals['num_cert_alpha_crown']/total*100:>{p_width}.2f}%)")
-    print(f"      - b-CROWN           : {totals['num_cert_abcrown']:>{n_width}} ({totals['num_cert_abcrown']/total*100:>{p_width}.2f}%)")
-    print()
-    if autoattack_adv_acc is not None:
-        print(f"  [2] AutoAttack adv acc  : {autoattack_correct:>{n_width}} / {total} ({autoattack_adv_acc:>{p_width}.2f}%)")
-        print(f"      - AutoAttack found  : {autoattack_total:>{n_width}} ({autoattack_total/total*100:>{p_width}.2f}%)")
-        print()
-    print(f"  [3] Verifier unsafe     : {verifier_unsafe_total:>{n_width}} ({verifier_unsafe_total/total*100:>{p_width}.2f}%)")
-    print(f"      - PGD               : {abcrown_pgd_total:>{n_width}} ({abcrown_pgd_total/total*100:>{p_width}.2f}%)")
-    print(f"      - b-CROWN unsafe    : {rej_total:>{n_width}} ({rej_total/total*100:>{p_width}.2f}%)")
-    print()
-    print(f"  [4] Unknown             : {unknown_total:>{n_width}} ({unknown_total/total*100:>{p_width}.2f}%)")
-    print(f"{'─'*55}")
-
-    # Calculate percentage relative to correctly classified images (Nat Acc)
-    if nat_acc > 0:
-        print(f"  Correctly classified breakdown:")
-        print(f"      - Certified (Safe)  : {cert_total:>{n_width}} / {nat_acc} ({cert_total/nat_acc*100:>{p_width}.2f}%)")
-        if autoattack_reported:
-            print(f"      - AutoAttack found  : {autoattack_total:>{n_width}} / {nat_acc} ({autoattack_total/nat_acc*100:>{p_width}.2f}%)")
-        print(f"      - Verifier unsafe   : {verifier_unsafe_total:>{n_width}} / {nat_acc} ({verifier_unsafe_total/nat_acc*100:>{p_width}.2f}%)")
-        print(f"      - Unknown           : {unknown_total:>{n_width}} / {nat_acc} ({unknown_total/nat_acc*100:>{p_width}.2f}%)")
-
-    print(f"{'='*55}\n")
+    print_shard_table(shards, using_full_complete, ignored_shards)
+    print_final_summary(totals, stage_flags)
 
 if __name__ == "__main__":
     results_dir = sys.argv[1]

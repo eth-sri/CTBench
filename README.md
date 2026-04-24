@@ -81,17 +81,29 @@ By default, all models are locally logged. One may enable the following addition
 
 ## Environments
 
-Recommended environment setup:
+Recommended separated environment setup:
 ```console
-conda env create -f environment.yaml
+conda create --name CTBench python=3.9
+conda activate CTBench
+conda install pytorch==1.12.1 torchvision==0.13.1 torchaudio==0.12.1 cudatoolkit=11.6 -c pytorch -c conda-forge
+pip install -r requirements.txt
+```
+
+A single shared environment is also supported when the CTBench and alpha-beta-CROWN dependencies are compatible on your machine. The provided file is a Linux/NVIDIA CUDA 12.8 reference environment:
+```console
+conda env create -f environments/reference_unified_cuda128.yaml
 conda activate unified_ctbench
 ```
 
-The unified environment is intended to run both CTBench training and alpha-beta-CROWN verification from one conda environment. The provided environment uses Python 3.11, PyTorch 2.8.0, and CUDA 12.8 wheels; make sure the target machine has a compatible NVIDIA driver for CUDA 12.8. This setup is not expected to exactly reproduce the original paper numbers, but our sanity-check runs produced on-par results.
+This reference environment uses Python 3.11, PyTorch 2.8.0, and CUDA 12.8 wheels; make sure the target machine has a compatible NVIDIA driver for CUDA 12.8. This setup is not expected to exactly reproduce the original paper numbers, but our sanity-check runs produced on-par results.
 
 ## Certification
 
-First, install alpha-beta-CROWN according to the instructions at `https://github.com/Verified-Intelligence/alpha-beta-CROWN`. Ensure it is located at `../alpha-beta-CROWN` relative to the CTBench workspace root. The certification subprocess invokes `conda run -n unified_ctbench` by default, matching the environment created from `environment.yaml`; use ```--abcrown-conda-env``` to override the environment name.
+First, install alpha-beta-CROWN according to the instructions at `https://github.com/Verified-Intelligence/alpha-beta-CROWN`. Ensure it is located at `../alpha-beta-CROWN` relative to the CTBench workspace root:
+```console
+git clone https://github.com/Verified-Intelligence/alpha-beta-CROWN ../alpha-beta-CROWN
+```
+The certification subprocess invokes `conda run -n unified_ctbench` by default, matching the optional reference environment above. When using separate CTBench and alpha-beta-CROWN environments, pass the verifier environment name with ```--abcrown-conda-env```.
 
 Certify your models with the parallel wrapper script ```./scripts/run_parallel_abcrown.sh```, which distributes evaluation across multiple GPUs. All arguments are passed as named flags and forwarded to ```abcrown_certify.py```. If ```--start-idx``` and ```--end-idx``` are provided, the script shards only that subrange; otherwise it shards the full test set. Logs are saved to the ```--save-dir``` directory if provided, otherwise to the model checkpoint's directory.
 
@@ -148,6 +160,7 @@ After certification completes, aggregate per-GPU results using:
 python summarize_results.py <results_directory>
 ```
 where `<results_directory>` is the `--save-dir` you specified, or the model checkpoint's directory if `--save-dir` was omitted (e.g., `./CTBenchRelease/cifar10/2.255/TAPS/`).
+For abCROWN result files, the summary reports the staged pipeline directly from split fields, e.g. external AutoAttack unsafe samples (`num_autoattack_attacked`), verifier-internal PGD unsafe samples (`num_abcrown_pgd_attacked` / `num_abcrown_pgd_unsafe`), BaB unsafe/rejected samples (`num_bab_rejected`), and the individual certification counts. Adversarial accuracy is shown for split-field runs when AutoAttack or verifier-internal PGD was used, and is computed from those attack-found unsafe counts; BaB unsafe/rejected samples remain a separate verifier bucket. Legacy MN-BaB result files are still supported, but their combined `num_adv_attacked` / `adv_unattacked_rate` fields are shown only as an aggregate unsafe bucket rather than as the main abCROWN summary buckets.
 
 If a fast evaluation is desired, pass ```--dp-only``` to skip beta-CROWN and rely only on fast incomplete lower bounds (alpha-CROWN). Alternatively, use ```--disable-abcrown``` to skip alpha-beta-CROWN verification altogether (```--test-eps``` is required in this case, since there is no YAML config to read epsilon from).
 
