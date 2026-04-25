@@ -24,7 +24,7 @@ The main training logic is implemented in ```mix_train.py```. For most cases, tr
 
 Tracking statistics of checkpoints is implemented in ```get_stat.py``` in the form of ```{stat}_loop```, e.g., ```relu_loop``` and ```PI_loop```. These functions are expected to be called at test time and will iterate over the full dataset to compute the corresponding statistics. It is recommended to implement new statistics tracking in a functional way similiarly.
 
-Model certification is done via a combination of IBP (fastest), PGD attack (fast) / autoattack (slow), alpha-CROWN incomplete bounds, and Branch-and-Bound complete verification via [alpha-beta-CROWN](https://github.com/Verified-Intelligence/alpha-beta-CROWN). This is implemented in ```abcrown_certify.py``` with a lightweight adapter (```abcrown_adapter.py```) bridging CTBench models and data to the alpha-beta-CROWN interface. For most cases (except when a new certification method is designed), it is recommended to **not** change these files at all.
+Model certification is done via a combination of IBP (fastest), optional AutoAttack for external adversarial accuracy, alpha-CROWN incomplete bounds, and Branch-and-Bound complete verification via [alpha-beta-CROWN](https://github.com/Verified-Intelligence/alpha-beta-CROWN). This is implemented in ```abcrown_certify.py``` with a lightweight adapter (```abcrown_adapter.py```) bridging CTBench models and data to the alpha-beta-CROWN interface, and helper utilities in ```abcrown_utils.py```. For most cases (except when a new certification method is designed), it is recommended to **not** change these files at all.
 
 Unit tests are included in ```Utility/test_functions.py``` and can be invoked via ```cd Utility; python test_functions.py; cd ..```. Note that these tests are not complete but serves as a minimal check. Make sure to include new unit tests for new `model wrapper`.
 
@@ -81,45 +81,77 @@ By default, all models are locally logged. One may enable the following addition
 
 ## Environments
 
-Recommended environment setup:
+Recommended separated environment setup:
 ```console
 conda create --name CTBench python=3.9
 conda activate CTBench
 conda install pytorch==1.12.1 torchvision==0.13.1 torchaudio==0.12.1 cudatoolkit=11.6 -c pytorch -c conda-forge
-```
-
-To install further requirements please run 
-```
 pip install -r requirements.txt
 ```
 
-Python=3.11 and PyTorch=2.8.0 are suggested to install alpha-beta-CROWN as they are tested on these versions. However, one may use separate training & certification environments to avoid version conflicts.
+A single shared environment is also supported when the CTBench and alpha-beta-CROWN dependencies are compatible on your machine. The provided file is a Linux/NVIDIA CUDA 12.8 reference environment:
+```console
+conda env create -f environments/reference_unified_cuda128.yaml
+conda activate unified_ctbench
+```
+
+This reference environment uses Python 3.11, PyTorch 2.8.0, and CUDA 12.8 wheels; make sure the target machine has a compatible NVIDIA driver for CUDA 12.8. This setup is not expected to exactly reproduce the original paper numbers, but our sanity-check runs produced on-par results.
 
 ## Certification
 
-First, install alpha-beta-CROWN according to the instructions at `https://github.com/Verified-Intelligence/alpha-beta-CROWN`. Ensure it is located at `../alpha-beta-CROWN` relative to the CTBench workspace root, and that the conda environment is named `alpha-beta-crown` (the certification subprocess invokes `conda run -n alpha-beta-crown`).
+First, install alpha-beta-CROWN according to the instructions at `https://github.com/Verified-Intelligence/alpha-beta-CROWN`. Ensure it is located at `../alpha-beta-CROWN` relative to the CTBench workspace root:
+```console
+git clone https://github.com/Verified-Intelligence/alpha-beta-CROWN ../alpha-beta-CROWN
+```
+The certification subprocess invokes `conda run -n unified_ctbench` by default, matching the optional reference environment above. If you use separate CTBench and alpha-beta-CROWN environments, pass the verifier environment explicitly with `--abcrown-conda-env`.
 
-Certify your models with the parallel wrapper script ```./run_parallel_abcrown.sh```, which distributes evaluation across multiple GPUs. All arguments are passed as named flags and forwarded to ```abcrown_certify.py```. Logs are saved to the ```--save-dir``` directory if provided, otherwise to the model checkpoint's directory.
+Certify your models with the parallel wrapper script ```./scripts/run_parallel_abcrown.sh```, which distributes evaluation across multiple GPUs. All arguments are passed as named flags and forwarded to ```abcrown_certify.py```. If ```--start-idx``` and ```--end-idx``` are provided, the script shards only that subrange; otherwise it shards the full test set. Logs are saved to the ```--save-dir``` directory if provided, otherwise to the model checkpoint's directory.
 
 For example, to run full certification with alpha-beta-CROWN:
 ```bash
-./run_parallel_abcrown.sh --dataset cifar10 --net cnn_7layer_bn \
+./scripts/run_parallel_abcrown.sh --dataset cifar10 --net cnn_7layer_bn \
     --load-model ./CTBenchRelease/cifar10/2.255/TAPS/model.ckpt \
     --abcrown-config abCROWN_configs/cifar10_eps2.255.yaml --test-batch 16 
 ```
 
+To follow the recommended separated attack reporting flow, install AutoAttack in your active environment (either the separated `CTBench` environment or the shared `unified_ctbench` environment):
+```bash
+pip install git+https://github.com/fra31/auto-attack
+```
+
+Then run AutoAttack before alpha-beta-CROWN and disable alpha-beta-CROWN's internal PGD:
+```bash
+./scripts/run_parallel_abcrown.sh --dataset cifar10 --net cnn_7layer_bn \
+    --load-model ./CTBenchRelease/cifar10/2.255/TAPS/model.ckpt \
+    --abcrown-config abCROWN_configs/cifar10_eps2.255.yaml \
+    --test-batch 128 --attack-batch 128 --abcrown-batch 16 \
+    --enable-heuristic-dpb --use-autoattack --disable-abcrown-pgd
+```
+Here ```--test-batch``` controls the outer CTBench batch size, ```--attack-batch``` controls AutoAttack's internal batch size, and ```--abcrown-batch``` controls alpha-beta-CROWN's solver batch size. For long runs where verifier errors (for example OOMs) should be treated as unknown samples instead of stopping the run, add ```--tolerate-error```.
+
 To run IBP + heuristic DeepPoly only (no alpha-beta-CROWN):
 ```bash
-./run_parallel_abcrown.sh --dataset cifar10 --net cnn_7layer_bn \
+./scripts/run_parallel_abcrown.sh --dataset cifar10 --net cnn_7layer_bn \
     --load-model ./CTBenchRelease/cifar10/2.255/TAPS/model.ckpt \
     --test-eps 0.00784313725 --test-batch 16 \
     --disable-abcrown --enable-heuristic-dpb
 ```
 
+To resume an interrupted parallel certification run, pass the previous output directory to ```--load-certify-directory```. You may reuse the same directory as ```--save-dir```, or write resumed outputs to a new directory for safety:
+```bash
+./scripts/run_parallel_abcrown.sh --dataset cifar10 --net cnn_7layer_bn \
+    --load-model ./CTBenchRelease/cifar10/2.255/TAPS/model.ckpt \
+    --abcrown-config abCROWN_configs/cifar10_eps2.255.yaml --test-batch 16 \
+    --load-certify-directory ./results/cifar10_eps2.255_taps \
+    --save-dir ./results/cifar10_eps2.255_taps_resume
+```
+Completed shards with ```complete_cert_<start>_<end>.json``` are copied to the output directory and skipped, while partial shards with ```cert_<start>_<end>.json``` resume from the last processed sample. Use the same GPU sharding as the original run so the shard ranges match.
+
 The certification pipeline automatically performs the following cascade:
 1. **IBP verification** (fastest) — certifies easy samples via interval arithmetic.
 2. **Heuristic DeepPoly** (optional) — enabled via the ```--enable-heuristic-dpb``` flag.
-3. **alpha-beta-CROWN** — for remaining samples, delegates to the verifier which natively handles PGD attacks, alpha-CROWN incomplete bounds, and beta-CROWN complete verification.
+3. **AutoAttack** (optional) — enabled via ```--use-autoattack``` and reported separately as external adversarial accuracy.
+4. **alpha-beta-CROWN** — for remaining samples, delegates to the verifier for alpha-CROWN incomplete bounds and beta-CROWN complete verification. Its internal PGD can be disabled via ```--disable-abcrown-pgd```; if enabled, the resulting ```unsafe-pgd``` count is reported separately from AutoAttack.
 
 Pre-built YAML configuration files are provided in ```./abCROWN_configs``` for all standard benchmark settings. Key parameters (epsilon, batch size, model/data paths) are automatically injected at runtime.
 
@@ -128,6 +160,15 @@ After certification completes, aggregate per-GPU results using:
 python summarize_results.py <results_directory>
 ```
 where `<results_directory>` is the `--save-dir` you specified, or the model checkpoint's directory if `--save-dir` was omitted (e.g., `./CTBenchRelease/cifar10/2.255/TAPS/`).
+For abCROWN result files, the summary reports the staged certification pipeline directly from split fields:
+- external AutoAttack unsafe samples (`num_autoattack_attacked`)
+- verifier-internal PGD unsafe samples (`num_abcrown_pgd_attacked` / `num_abcrown_pgd_unsafe`)
+- BaB unsafe/rejected samples (`num_bab_rejected`)
+- individual certification counts
+
+The reported adversarial accuracy corresponds to the accuracy after removing attack-found unsafe samples (e.g. AutoAttack and/or verifier-internal PGD, depending on the enabled pipeline stages). BaB unsafe/rejected samples are reported separately as a verifier bucket and are not folded into this adversarial-accuracy metric.
+
+Legacy MN-BaB result files are still supported, but their combined `num_adv_attacked` / `adv_unattacked_rate` fields are treated as a coarse aggregate unsafe bucket rather than the main staged abCROWN summary breakdown.
 
 If a fast evaluation is desired, pass ```--dp-only``` to skip beta-CROWN and rely only on fast incomplete lower bounds (alpha-CROWN). Alternatively, use ```--disable-abcrown``` to skip alpha-beta-CROWN verification altogether (```--test-eps``` is required in this case, since there is no YAML config to read epsilon from).
 
