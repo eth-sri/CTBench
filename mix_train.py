@@ -85,7 +85,7 @@ def train_loop(model_wrapper:BasicModelWrapper, eps_scheduler:Scheduler, robust_
 
             if fast_reg:
                 # add fast reg to the loss
-                if reg_eps != eps:
+                if reg_eps != eps or model_wrapper.net[1].bounds is None:
                     # recompute bounds for fast reg
                     model_wrapper.net.reset_bounds()
                     abs_x = HybridZonotope.construct_from_noise(x, reg_eps, "box")
@@ -327,7 +327,10 @@ def run(args):
     if args.opt == 'adam':
         optimizer = torch.optim.Adam(param_list, lr=lr)
     elif args.opt == 'sgd':
-        optimizer = torch.optim.SGD(param_list, lr=lr, momentum=args.momentum)
+        if args.use_sgd_momentum:
+            optimizer = torch.optim.SGD(param_list, lr=lr, momentum=args.momentum)
+        else:
+            optimizer = torch.optim.SGD(param_list, lr=lr)
     else:
         raise ValueError(f"{args.opt} not supported.")
     if args.use_swa:

@@ -141,6 +141,10 @@ class BasicModelWrapper(nn.Module):
     def to(self, device):
         self._device = device
         self.net = self.net.to(device)
+        if hasattr(self, "teacher"):
+            self.teacher = self.teacher.to(device)
+        if hasattr(self, "wrapper"):
+            self.wrapper = self.wrapper.to(device)
         return self
 
     def Get_Performance(self, x:torch.Tensor, y:torch.Tensor, use_model:Optional[Callable]=None) -> Tuple[torch.Tensor, torch.Tensor, torch.BoolTensor]:
