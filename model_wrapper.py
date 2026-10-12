@@ -1264,7 +1264,7 @@ class CCDistModelWrapper(CCIBPModelWrapper):
 class ADCERTModelWrapper(BoxModelWrapper):
     '''
     Implements AD-CERT training
-    Reference: https://arxiv.org/pdf/2606.31653
+    Reference: https://arxiv.org/pdf/2606.31653; Code: https://github.com/matteo-melis/ad-cert
 
     @param
         ibp_coef: float; the coefficient for the IBP loss.

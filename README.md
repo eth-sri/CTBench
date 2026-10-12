@@ -67,7 +67,7 @@ Standard: by `--use-std-training`. This option specifies to use the standard tra
 [AD-CERT](https://arxiv.org/abs/2606.31653): by `--use-adcert-training --teacher-model teacher.ckpt --ibp-coef 0.01 --attack-range-scale 2 --model-selection None`. Combines adversarial logit distillation with IBP. See the [CIFAR-10 example](scripts/examples/cifar10/2.255/train_adcert.sh) for the full configuration.
 [Optional flags from ablation studies]: Use `--use-rslad` for RSLAD-CERT or `--use-nat-kl` for natural-input distillation (mutually exclusive). `--use-softlabel-attack` selects KL-PGD, and `--teacher-input adv` evaluates the teacher on adversarial inputs instead of clean inputs.
 
-CC-DIST and AD-CERT are distillation based certified training methods that require a teacher checkpoint matching the student architecture: by `--teacher-model`. Reported robust accuracy is PGD accuracy, so use `--model-selection None` with a positive IBP coefficient.
+CC-DIST and AD-CERT are distillation based certified training methods that require a teacher checkpoint matching the student architecture. `--teacher-model` loads the teacher, `--load-model` optionally initializes the student. Reported robust accuracy is PGD accuracy, so use `--model-selection None` with a positive IBP coefficient.
 
 ### Functionality
 
@@ -186,6 +186,8 @@ If a fast evaluation is desired, pass ```--dp-only``` to skip beta-CROWN and rel
 ## CTBench Pretrained Models
 
 Please download from [MEGA](https://mega.nz/folder/3QBgiLaD#YsidcFQ5aGKmGpJF7S1loQ). It takes 2.72GB memory.
+
+The pretrained [AD-CERT](https://arxiv.org/pdf/2606.31653) models are available separately from [MEGA](https://mega.nz/file/XShSXbAS#DFsjICl8XHtx__xaEKkNCDNBbHLB-YjbjwH1T7rCNis). It takes 607MB memory. Place AD_CERT_RELEASE in the repository root to use the example scripts.
 
 ## Benchmark
 
