@@ -68,8 +68,11 @@ def get_args(include:Iterable=["basic", "train", "cert"]):
         parser.add_argument('--opt', default='adam', type=str, choices=['adam', 'sgd'], help='Optimizer to use.')
         parser.add_argument('--n-epochs', default=1, type=int, help='Number of train epochs.')
         parser.add_argument('--lr', default=1e-3, type=float, help='Learning rate for optimizer.')
+        parser.add_argument('--lr-schedule', default='multistep',  type=str, choices=['multistep', 'cyclic'], help='lr schedule to use. Cyclic sometimes used in PGD-based training literature.')
+        parser.add_argument('--lr-min', default=0.0, type=float, help='Minimum LR for cyclic schedule.')
         parser.add_argument('--lr-milestones', default=None,  type=int, nargs='*', help='The milestones for MultiStepLR.')
         parser.add_argument('--lr-decay-factor', default=0.2,  type=float, help='The decay rate of lr.')
+        parser.add_argument("--use-sgd-momentum", action='store_true', help="Whether to use an explicit momentum value for SGD.")
         parser.add_argument('--momentum', default=0.9, type=float, help='Momentum for SGD optimizer.')
         parser.add_argument('--grad-clip', default=1e10,  type=float, help="Maximum gradient L2 norm for each step.")
         parser.add_argument('--model-selection', default="robust_accu", type=str_or_none, help='The criterium for selecting models.')
@@ -145,8 +148,18 @@ def get_args(include:Iterable=["basic", "train", "cert"]):
         parser.add_argument('--use-mtlibp-training', action='store_true', help='Whether to use MTL-IBP.')
         parser.add_argument('--use-expibp-training', action='store_true', help='Whether to use EXP-IBP.')
         parser.add_argument('--use-ccibp-training', action='store_true', help='Whether to use CC-IBP.')
-        parser.add_argument('--ibp-coef', default=1, type=float, help='The coefficient of IBP loss in MTL-IBP / EXP-IBP / CC-IBP.')
-        parser.add_argument('--attack-range-scale', default=1, type=float, help='The attack eps as scale*train_eps in MTL-IBP / EXP-IBP / CC-IBP.')
+        parser.add_argument('--ibp-coef', default=1, type=float, help='The coefficient of IBP loss in MTL-IBP / EXP-IBP / CC-IBP / CC-DIST /AD-CERT.')
+        parser.add_argument('--attack-range-scale', default=1, type=float, help='The attack eps as scale*train_eps in MTL-IBP / EXP-IBP / CC-IBP / CC-DIST / AD-CERT.')
+
+        # Distillation Training
+        parser.add_argument('--use-ccdist-training', action='store_true', help='Whether to use CC-DIST.')
+        parser.add_argument('--use-adcert-training', action='store_true', help='Whether to use AD-CERT.')
+        parser.add_argument('--teacher-model', type=str, default=None, help='Path to the teacher state dict (.ckpt file).')
+        parser.add_argument('--teacher-input', type=str, default='clean', choices=['clean', 'adv'], help='Whether to use clean or adv inputs for the teacher.')
+        parser.add_argument('--teacher-tag', type=str, default='adv', help='Whether you are using clean or adv teacher.')
+        parser.add_argument('--use-nat-kl', action='store_true', help='Use natural inputs on teacher instead of adv inputs.')
+        parser.add_argument('--use-rslad', action='store_true', help='Enable adversarial distillation to be RSLAD instead of AD.')
+        parser.add_argument('--use-softlabel-attack', action='store_true', help='Whether to just use KL adv attack, without doing natural component of RSLAD.')
 
 
         # (Small box) SABR Training
@@ -198,12 +211,41 @@ def get_args(include:Iterable=["basic", "train", "cert"]):
         parser.add_argument('--end-idx', default=-1, type=int, help='the end index of the input in the test dataset (exclusive). -1 for the end of the dataset.')
 
     args = parser.parse_args()
-    check_args(args, include)
+    try:
+        check_args(args, include)
+    except AssertionError as error:
+        parser.error(str(error))
 
     return args
 
 def check_args(args, include):
     if "train" in include:
+        if args.use_sgd_momentum:
+            assert args.opt == 'sgd', "--use-sgd-momentum requires --opt sgd."
+            assert args.momentum >= 0, "--momentum must be non negative."
+
+        if args.lr_schedule == 'cyclic':
+            assert args.opt == 'sgd', (
+                "Cyclic scheduling only supports SGD, use --opt sgd. "
+                "This follows N-FGSM: https://github.com/pdejorge/N-FGSM "
+                "(paper: https://arxiv.org/abs/2202.01181)."
+            )
+            assert 0 <= args.lr_min <= args.lr < float('inf'), "Cyclic scheduling requires 0 <= --lr-min <= --lr."
+            assert args.n_epochs > 0, "Cyclic scheduling requires a positive --n-epochs."
+
+        distillation = args.use_adcert_training or args.use_ccdist_training
+        if args.teacher_model is not None:
+            assert distillation, "Teacher options require --use-adcert-training or --use-ccdist-training."
+        if args.use_softlabel_attack or args.use_rslad or args.use_nat_kl or args.teacher_input == 'adv':
+            assert args.use_adcert_training, "Distillation variants and --teacher-input adv require --use-adcert-training."
+        assert not (args.use_rslad and args.use_nat_kl), "--use-rslad and --use-nat-kl are mutually exclusive."
+
+        if distillation:
+            assert args.teacher_model, "AD-CERT and CC-DIST require --teacher-model path."
+            assert not (args.use_EDAC_step or args.use_small_box or args.relu_shrinkage is not None), "AD-CERT and CC-DIST do not support --use-EDAC-step, --use-small-box or --relu-shrinkage."
+            if args.ibp_coef > 0:
+                assert args.model_selection is None, "Use --model-selection None with a positive --ibp-coef: robust accuracy is PGD accuracy, not certified accuracy."
+
         if args.use_taps_training:
             assert args.block_sizes is not None and len(args.block_sizes)==2, "TAPS requires block_sizes to be a list containing 2 integers summing up to the total number of layers."
 

@@ -62,6 +62,13 @@ Standard: by `--use-std-training`. This option specifies to use the standard tra
 
 [MTL-IBP](https://arxiv.org/abs/2305.13991): by `--use-mtlibp-training --ibp-coef 0.1 --attack-range-scale 1 --model-selection None`. SWA can be used to further improve generalization by `--use-swa --swa-start 150` (start to register SWA after epoch 150). While SWA does not harm, in most cases it does not improve test accuracy as well.
 
+[CC-DIST](https://arxiv.org/abs/2602.02626): by `--use-ccdist-training --teacher-model teacher.ckpt --ibp-coef 0.01 --attack-range-scale 2 --model-selection None`. Combines robust feature distillation with CC-IBP. See the [CIFAR-10 example](scripts/examples/cifar10/2.255/train_ccdist.sh) for the full configuration.
+
+[AD-CERT](https://arxiv.org/abs/2606.31653): by `--use-adcert-training --teacher-model teacher.ckpt --ibp-coef 0.01 --attack-range-scale 2 --model-selection None`. Combines adversarial logit distillation with IBP. See the [CIFAR-10 example](scripts/examples/cifar10/2.255/train_adcert.sh) for the full configuration.
+[Optional flags from ablation studies]: Use `--use-rslad` for RSLAD-CERT or `--use-nat-kl` for natural-input distillation (mutually exclusive). `--use-softlabel-attack` selects KL-PGD, and `--teacher-input adv` evaluates the teacher on adversarial inputs instead of clean inputs.
+
+CC-DIST and AD-CERT are distillation based certified training methods that require a teacher checkpoint matching the student architecture. `--teacher-model` loads the teacher, `--load-model` optionally initializes the student. Reported robust accuracy is PGD accuracy, so use `--model-selection None` with a positive IBP coefficient.
+
 ### Functionality
 
 [Precise BN](https://arxiv.org/abs/2105.07576): by `--use-pop-bn-stats`. This will reset BN based on the full train set after each epoch. Recommended to be the default.
@@ -71,6 +78,10 @@ Standard: by `--use-std-training`. This option specifies to use the standard tra
 [Gaussian Gradient Descent](https://arxiv.org/abs/2311.00521): by `--use-weight-smooth --weight-smooth-std-scale 1e-2`. Not included in the benchmark.
 
 Gradient Accumulation with Original BN: by `--grad-accu-batch 64`. Batch norm are set based on the full batch instead of subbatch.
+
+LR Scheduling: by `--lr-schedule multistep` (default), using `--lr-milestones` and `--lr-decay-factor`. The AD-CERT and CC-DIST examples use Adam with this schedule. Use `--opt sgd --lr-schedule cyclic --lr-min 0` for batch-wise LR and momentum cycling, following [N-FGSM](https://github.com/pdejorge/N-FGSM). `--lr` sets the peak LR.
+
+SGD Momentum: by `--opt sgd --use-sgd-momentum --momentum 0.9`. Without this opt-in, multistep SGD uses zero momentum.
 
 ### Logging
 
@@ -175,6 +186,8 @@ If a fast evaluation is desired, pass ```--dp-only``` to skip beta-CROWN and rel
 ## CTBench Pretrained Models
 
 Please download from [MEGA](https://mega.nz/folder/3QBgiLaD#YsidcFQ5aGKmGpJF7S1loQ). It takes 2.72GB memory.
+
+The pretrained [AD-CERT](https://arxiv.org/pdf/2606.31653) models are available separately from [MEGA](https://mega.nz/file/XShSXbAS#DFsjICl8XHtx__xaEKkNCDNBbHLB-YjbjwH1T7rCNis). It takes 607MB memory. Place AD_CERT_RELEASE in the repository root to use the example scripts.
 
 ## Benchmark
 

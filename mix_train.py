@@ -29,7 +29,7 @@ except:
     neptune = None
 nep_log = None # A global variable to store neptune log
 
-def train_loop(model_wrapper:BasicModelWrapper, eps_scheduler:Scheduler, robust_weight_scheduler:Scheduler, train_loader, epoch_idx, optimizer, device, args, verbose:bool=False):
+def train_loop(model_wrapper:BasicModelWrapper, eps_scheduler:Scheduler, robust_weight_scheduler:Scheduler, train_loader, epoch_idx, optimizer, lr_schedular, device, args, verbose:bool=False):
     model_wrapper.net.train()
     model_wrapper.summary_accu_stat = False
     model_wrapper.freeze_BN = False
@@ -85,7 +85,7 @@ def train_loop(model_wrapper:BasicModelWrapper, eps_scheduler:Scheduler, robust_
 
             if fast_reg:
                 # add fast reg to the loss
-                if reg_eps != eps:
+                if reg_eps != eps or model_wrapper.net[1].bounds is None:
                     # recompute bounds for fast reg
                     model_wrapper.net.reset_bounds()
                     abs_x = HybridZonotope.construct_from_noise(x, reg_eps, "box")
@@ -126,7 +126,9 @@ def train_loop(model_wrapper:BasicModelWrapper, eps_scheduler:Scheduler, robust_
         else:
             optimizer.step()
         model_wrapper.param_postprocess() # can be inherited to customize parameter postprocessing; default: no parameter postprocessing
-
+        if args.lr_schedule == "cyclic":
+            lr_schedular.step()
+            model_wrapper.current_lr = lr_schedular.get_last_lr()[0]
         nat_accu_stat.update(nat_accu, len(x))
         robust_accu_stat.update(robust_accu, len(x))
 
@@ -148,7 +150,7 @@ def get_train_mode(args):
     '''
     Define the name of the training method here.
     '''
-    assert args.use_std_training + args.use_pgd_training + args.use_multipgd_training + args.use_arow_training + args.use_mart_training + args.use_ibp_training + args.use_taps_training + args.use_DP_training + args.use_DPBox_training + args.use_mtlibp_training + args.use_expibp_training + args.use_ccibp_training == 1, "Only one training method can be used at a time."
+    assert args.use_std_training + args.use_pgd_training + args.use_multipgd_training + args.use_arow_training + args.use_mart_training + args.use_ibp_training + args.use_taps_training + args.use_DP_training + args.use_DPBox_training + args.use_mtlibp_training + args.use_expibp_training + args.use_ccibp_training + args.use_adcert_training + args.use_ccdist_training == 1, "Only one training method can be used at a time."
     if args.use_pgd_training:
         if args.use_EDAC_step:
             mode = "EDAC_trained"
@@ -174,6 +176,10 @@ def get_train_mode(args):
         mode = "EXPIBP_trained"
     elif args.use_ccibp_training:
         mode = "CCIBP_trained"
+    elif args.use_ccdist_training:
+        mode = "CCDIST_trained"
+    elif args.use_adcert_training:
+        mode = "ADCERT_trained"
     elif args.use_std_training:
         mode = "std_trained"
     else:
@@ -205,6 +211,18 @@ def parse_save_root(args, mode):
         save_root = os.path.join(save_root, f"EDAC_step_{args.EDAC_step_size}")
     if args.use_mtlibp_training or args.use_expibp_training or args.use_ccibp_training:
         save_root = os.path.join(save_root, f"ibp_coef_{args.ibp_coef}")
+    if args.use_adcert_training or args.use_ccdist_training:
+        save_root = os.path.join(save_root, f"ibp_coef_{args.ibp_coef}")
+        if args.teacher_tag != "adv":
+            save_root = os.path.join(save_root, f"teacher_{args.teacher_tag}")
+        if args.teacher_input != "clean":
+            save_root = os.path.join(save_root, f"teacher_input_{args.teacher_input}")
+        if args.use_rslad:
+            save_root = os.path.join(save_root, f"rslad")
+        if args.use_nat_kl:
+            save_root = os.path.join(save_root, f"nat_kl")
+    if args.use_softlabel_attack:
+       save_root = os.path.join(save_root, f"sl_attack")
     if args.L1_reg > 0:
         save_root = os.path.join(save_root, f"L1_{args.L1_reg}")
     if args.PI_reg > 0:
@@ -309,7 +327,10 @@ def run(args):
     if args.opt == 'adam':
         optimizer = torch.optim.Adam(param_list, lr=lr)
     elif args.opt == 'sgd':
-        optimizer = torch.optim.SGD(param_list, lr=lr)
+        if args.use_sgd_momentum:
+            optimizer = torch.optim.SGD(param_list, lr=lr, momentum=args.momentum)
+        else:
+            optimizer = torch.optim.SGD(param_list, lr=lr)
     else:
         raise ValueError(f"{args.opt} not supported.")
     if args.use_swa:
@@ -318,16 +339,21 @@ def run(args):
         EDAC_optimizer = optimizer if not args.use_swa else optimizer.optimizer
         model_wrapper.register_EDAC_hyperparam(EDAC_optimizer, args.EDAC_step_size)
 
-    lr_schedular = torch.optim.lr_scheduler.MultiStepLR(optimizer, args.lr_milestones, gamma=args.lr_decay_factor)
-    model_wrapper.current_lr = lr_schedular.get_last_lr()[0]
+    if args.lr_schedule == 'cyclic':
+        # cyclic lr scheduler adapted from https://github.com/pdejorge/N-FGSM, paper: https://arxiv.org/abs/2202.01181
+        lr_steps = args.n_epochs * len(train_loader)
+        lr_schedular = torch.optim.lr_scheduler.CyclicLR(optimizer, base_lr=max(args.lr_min, 1e-8), max_lr=args.lr, step_size_up=lr_steps/2, step_size_down=lr_steps/2)
+    else:
+        lr_schedular = torch.optim.lr_scheduler.MultiStepLR(optimizer, args.lr_milestones, gamma=args.lr_decay_factor)
 
+    model_wrapper.current_lr = lr_schedular.get_last_lr()[0]
     train_time = 0.0
     for epoch_idx in range(args.n_epochs):
         print("Epoch", epoch_idx)
 
         #### ---- train loop below ----
         train_start_time = time.time()
-        train_nat_accu, train_robust_accu, eps, fast_reg_avg, train_loss = train_loop(model_wrapper, eps_scheduler, robust_weight_scheduler, train_loader, epoch_idx, optimizer, device, args, verbose=verbose)
+        train_nat_accu, train_robust_accu, eps, fast_reg_avg, train_loss = train_loop(model_wrapper, eps_scheduler, robust_weight_scheduler, train_loader, epoch_idx, optimizer, lr_schedular, device, args, verbose=verbose)
         train_time += time.time() - train_start_time
         print(f"train_nat_accu: {train_nat_accu: .4f}, train_robust_accu: {train_robust_accu: .4f}, train_loss:{train_loss: .4f}")
 
@@ -338,7 +364,8 @@ def run(args):
         perf_dict["train_loss_curve"].append(train_loss)
 
         # Update learning rate here.
-        lr_schedular.step()
+        if args.lr_schedule == "multistep":
+            lr_schedular.step()
         lr = lr_schedular.get_last_lr()[0]
         perf_dict['lr_curve'].append(lr)
         model_wrapper.current_lr = lr

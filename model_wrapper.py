@@ -1,3 +1,4 @@
+import copy
 import torch
 import torch.nn.functional as F
 import numpy as np
@@ -46,6 +47,10 @@ def get_model_wrapper(args, net, device, input_dim):
         model_wrapper = EXPIBPModelWrapper(net, nn.CrossEntropyLoss(), input_dim, device, args, args.ibp_coef, args.attack_range_scale)
     elif args.use_ccibp_training:
         model_wrapper = CCIBPModelWrapper(net, nn.CrossEntropyLoss(), input_dim, device, args, args.ibp_coef, args.attack_range_scale)
+    elif args.use_ccdist_training:
+        model_wrapper = CCDistModelWrapper(net, nn.CrossEntropyLoss(), input_dim, device, args, args.ibp_coef, args.attack_range_scale)
+    elif args.use_adcert_training:
+        model_wrapper = ADCERTModelWrapper(net, nn.CrossEntropyLoss(), input_dim, device, args, args.ibp_coef, args.attack_range_scale)
     elif args.use_std_training:
         model_wrapper = BasicModelWrapper(net, nn.CrossEntropyLoss(), input_dim, device, args)
     else:
@@ -136,6 +141,10 @@ class BasicModelWrapper(nn.Module):
     def to(self, device):
         self._device = device
         self.net = self.net.to(device)
+        if hasattr(self, "teacher"):
+            self.teacher = self.teacher.to(device)
+        if hasattr(self, "wrapper"):
+            self.wrapper = self.wrapper.to(device)
         return self
 
     def Get_Performance(self, x:torch.Tensor, y:torch.Tensor, use_model:Optional[Callable]=None) -> Tuple[torch.Tensor, torch.Tensor, torch.BoolTensor]:
@@ -1094,7 +1103,8 @@ class MTLIBPModelWrapper(BoxModelWrapper):
 
     def __init__(self, net:absSequential, loss_fn:Callable, input_dim:Tuple[int, ...], device, args, ibp_coef:float, attack_range_scale:float, store_box_bounds:bool=False, **kwargs):
         super().__init__(net=net, loss_fn=loss_fn, input_dim=input_dim, device=device, args=args, store_box_bounds=store_box_bounds, **kwargs)
-        assert args.model_selection is None, "MTL-IBP / EXP-IBP / CC-IBP does not support model selection."
+        if not (getattr(args, "use_ccdist_training", False) and abs(float(ibp_coef)) < 1e-12):
+            assert args.model_selection is None, "MTL-IBP / EXP-IBP / CC-IBP / CC-DIST does not support model selection."
         self._ibp_coef = float(ibp_coef)
         self._num_steps = int(args.train_steps)
         self._restarts = int(args.restarts)
@@ -1166,6 +1176,195 @@ class CCIBPModelWrapper(MTLIBPModelWrapper):
         robust_loss = self.loss_fn(margin, pseudo_labels)
         pgd_accu, is_pgd_accu = self._Get_Accuracy(yadv, y)
         return robust_loss, pgd_accu, is_pgd_accu
+
+class CCDistModelWrapper(CCIBPModelWrapper):
+    '''
+    Implements CC-Dist training
+    Reference: https://arxiv.org/pdf/2602.02626;
+
+    @remark
+        Model selection is not supported for CC-DIST since it do not estimate certified accuracy. The returned robust accuracy is PGD accuracy.
+        CC-DIST: CC_IBP(ibp_coef) + 5/feat_dim * Robust_Dist(ibp_coef)
+    '''
+    def __init__(self, net:absSequential, loss_fn:Callable, input_dim:Tuple[int, ...], device, args, ibp_coef:float, attack_range_scale:float, store_box_bounds:bool=False, **kwargs):
+        super().__init__(net=net, loss_fn=loss_fn, input_dim=input_dim, device=device, args=args, ibp_coef=ibp_coef, attack_range_scale=attack_range_scale, store_box_bounds=store_box_bounds, **kwargs)
+        self._register_teacher(net, args.load_model, args.teacher_model)
+        self.feature_net, self.head_net = self._split_feature_head(net)
+        self.teacher_feature_net, self.teacher_head_net = self._split_feature_head(self.teacher)
+        self.feat_dim = int(np.prod(self.feature_net.output_dim))
+
+    def _register_teacher(self, model:absSequential, student_path:str, teacher_path:str):
+        '''Stores a frozen copy of the teacher model'''
+        self.teacher:absSequential = copy.deepcopy(model)
+        if teacher_path is None:
+            raise NotImplementedError("CC-DIST requires a teacher.")
+        if student_path != teacher_path:
+            # student has been initialised with random weights, not the teacher weights
+            self.teacher.load_state_dict(torch.load(teacher_path))
+            print("Loaded Teacher from: ", teacher_path)
+        self.teacher.eval()
+
+    def _split_feature_head(self, net: absSequential):
+        feature_net = abs_layers.Sequential(*net[:-1])
+        feature_net.output_dim = feature_net[-1].output_dim
+        head_net = abs_layers.Sequential(*net[-1:])
+        head_net.output_dim = head_net[-1].output_dim
+        return feature_net, head_net
+
+    def _flatten_feat(self, feat: torch.Tensor) -> torch.Tensor:
+        '''Flatten to shape [batch_size, feat_dim] to make impl robust to conv layers'''
+        return feat.flatten(start_dim=1)
+
+    def get_robust_dist_loss(self, x: torch.Tensor, feat_adv: torch.Tensor, feat_lb: torch.Tensor, feat_ub: torch.Tensor) -> torch.Tensor:
+        with torch.no_grad():
+            feat_teacher = self._flatten_feat(self.teacher_feature_net(x))
+
+        feat_adv = self._flatten_feat(feat_adv)
+        feat_lb = self._flatten_feat(feat_lb)
+        feat_ub = self._flatten_feat(feat_ub)
+
+        feat_cc_lb = (1.0 - self.ibp_coef) * feat_adv + self.ibp_coef * feat_lb
+        feat_cc_ub = (1.0 - self.ibp_coef) * feat_adv + self.ibp_coef * feat_ub
+
+        robust_dist_loss = torch.maximum(
+            (feat_cc_lb - feat_teacher) ** 2,
+            (feat_cc_ub - feat_teacher) ** 2
+        )
+
+        return robust_dist_loss.sum(dim=1).mean()
+
+    def get_robust_dist_loss_no_ibp(self, x, feat_adv):
+        with torch.no_grad():
+            feat_teacher = self._flatten_feat(self.teacher_feature_net(x))
+        feat_adv = self._flatten_feat(feat_adv)
+        return ((feat_adv - feat_teacher) ** 2).sum(dim=1).mean()
+
+    def get_robust_stat_from_bounds(self, lb:torch.Tensor, ub:torch.Tensor, x:torch.Tensor, y:torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.BoolTensor]:
+        attack_lb, attack_ub = self.get_attack_range(self.current_eps, x)
+        xadv = adv_whitebox(self.net, x, y, attack_lb, attack_ub, self.device, self.num_steps, step_size=self.step_size, restarts=self.restarts, lossFunc="pgd")
+        feat_adv = self.feature_net(xadv)
+        yadv = self.head_net(feat_adv)
+
+        PGD_bound = self.convert_pred_to_margin(y, yadv)
+        if self.ibp_coef > 0:
+            feat_lb, feat_ub = self.get_IBP_bounds(self.feature_net, lb, ub, y=None)
+            IBP_bound, pseudo_labels = self.get_IBP_bounds(self.head_net, feat_lb, feat_ub, y)
+            margin = IBP_bound*self.ibp_coef + PGD_bound*(1 - self.ibp_coef)
+            robust_dist_loss = self.get_robust_dist_loss(x, feat_adv, feat_lb, feat_ub)
+        else:
+            margin = PGD_bound
+            pseudo_labels = torch.zeros(size=(PGD_bound.size(0),), dtype=torch.int64, device=PGD_bound.device)
+            robust_dist_loss = self.get_robust_dist_loss_no_ibp(x, feat_adv)
+
+        ccibp_loss = self.loss_fn(margin, pseudo_labels)
+        total_loss = ccibp_loss  + 5.0/self.feat_dim * robust_dist_loss
+        adv_accu, is_adv_accu = self._Get_Accuracy(yadv, y)
+        return total_loss, adv_accu, is_adv_accu
+
+class ADCERTModelWrapper(BoxModelWrapper):
+    '''
+    Implements AD-CERT training
+    Reference: https://arxiv.org/pdf/2606.31653; Code: https://github.com/matteo-melis/ad-cert
+
+    @param
+        ibp_coef: float; the coefficient for the IBP loss.
+        Other parameters inherited from BoxModelWrapper
+
+    @property
+        ibp_coef: float; the coefficient for the IBP loss
+        num_steps: int; the number of steps for PGD. By default, it is set to args.train_steps.
+        restarts: int; the number of restarts for PGD. By default, it is set to args.restarts.
+        softlabel_attack: bool; use a softlabel PGD attack to generate x_adv.
+        Other properties inherited from BoxModelWrapper
+
+    @remark
+        Model selection is not supported for AD-CERT since it do not estimate certified accuracy. The returned robust accuracy is PGD accuracy.
+        AD-CERT: ibp_coef * IBP_loss + (1 - ibp_coef) * KL_DIV(natural_teacher_probs || adv_student_probs)
+    '''
+    ibp_coef = property(fget=lambda self: self._ibp_coef, fset=lambda self, value: set_value_between(self, "_ibp_coef", value, 0, 1, float))
+    num_steps = property(fget=lambda self: self._num_steps, fset=lambda self, value: set_value_typecast(self, "_num_steps", value, int, lambda x: x>0, "num_steps must be a positive integer."))
+    softlabel_attack = property(fget=lambda self: self._softlabel_attack, fset=lambda self, value: set_value_typecheck(self, "_softlabel_attack", value, bool))
+    rslad = property(fget=lambda self: self._rslad, fset=lambda self, value: set_value_typecheck(self, "_rslad", value, bool))
+    nat_kl = property(fget=lambda self: self._nat_kl, fset=lambda self, value: set_value_typecheck(self, "_nat_kl", value, bool))
+    restarts = property(fget=lambda self: self._restarts, fset=lambda self, value: set_value_typecast(self, "_restarts", value, int, lambda x: x>0, "restarts must be a positive integer."))
+    step_size = property(fget=lambda self: self._step_size, fset=lambda self, value: set_value_typecast(self, "_step_size", value, float, lambda x: x>0, "step_size must be a positive float."))
+    attack_range_scale = property(fget=lambda self: self._attack_range_scale, fset=lambda self, value: set_value_typecast(self, "_attack_range_scale", value, float, lambda x: x>0, "attack_range_scale must be a positive float."))
+
+    def __init__(self, net:absSequential, loss_fn:Callable, input_dim:Tuple[int, ...], device, args, ibp_coef:float, attack_range_scale:float, store_box_bounds:bool=False, **kwargs):
+        super().__init__(net=net, loss_fn=loss_fn, input_dim=input_dim, device=device, args=args, store_box_bounds=store_box_bounds, **kwargs)
+        if ibp_coef > 0:
+            assert args.model_selection is None, (
+                "AD-CERT/RSLAD-CERT with ibp_coef > 0 does not support meaningful model selection, "
+                "because returned robust_accu is PGD accuracy, not certified accuracy."
+            )
+        self._ibp_coef = float(ibp_coef)
+        self._num_steps = int(args.train_steps)
+        self._restarts = int(args.restarts)
+        self._softlabel_attack = bool(args.use_softlabel_attack)
+        self._rslad = bool(args.use_rslad)
+        self._nat_kl = bool(args.use_nat_kl)
+        self._step_size = max(0.25, 2/self._num_steps) if args.step_size is None else float(args.step_size)
+        self._attack_range_scale = float(attack_range_scale)
+        self._register_teacher(net, args.load_model, args.teacher_model)
+        logging.info(f"Using attack range scale: {self._attack_range_scale}, ibp coef: {self._ibp_coef}.")
+
+    def _register_teacher(self, model:absSequential, student_path:str, teacher_path:str):
+        '''Stores a frozen copy of the teacher model'''
+        self.teacher:absSequential = copy.deepcopy(model) #TODO: Make more robust to handle different architecture to the student
+        if teacher_path is None:
+            raise NotImplementedError("ADCERT requires a teacher.")
+        if student_path != teacher_path:
+            # student has been initialised with random weights, not the teacher weights
+            self.teacher.load_state_dict(torch.load(teacher_path))
+            print("Loaded Teacher from: ", teacher_path)
+        self.teacher.eval()
+
+    def get_attack_range(self, eps:float, x:torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        attack_eps = eps * self.attack_range_scale
+        return (x - attack_eps).clamp(min=self.data_min), (x + attack_eps).clamp(max=self.data_max)
+
+    def get_robust_stat_from_bounds(self, lb:torch.Tensor, ub:torch.Tensor, x:torch.Tensor, y:torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.BoolTensor]:
+        assert self.rslad + self.nat_kl <= 1, "Cannot use two different distillation schemes."
+        if self.ibp_coef > 0:
+            pseudo_bound, pseudo_labels = self.get_IBP_bounds(self.net, lb, ub, y)
+            IBP_loss = self.loss_fn(pseudo_bound, pseudo_labels)
+        attack_lb, attack_ub = self.get_attack_range(self.current_eps, x)
+        # Use KL attack only during training for RSLAD / soft-label attack, then
+        # use CE-PGD during evaluation/model selection for comparable robust_accu.
+        use_kl_attack = self.net.training and (self.softlabel_attack or self.rslad)
+        if use_kl_attack:
+            xadv = adv_whitebox(self.net, x, y, attack_lb, attack_ub, self.device, self.num_steps, step_size=self.step_size, restarts=self.restarts, lossFunc="KL", teacher=self.teacher)
+        else:
+            xadv = adv_whitebox(self.net, x, y, attack_lb, attack_ub, self.device, self.num_steps, step_size=self.step_size, restarts=self.restarts, lossFunc="pgd")
+        s_adv_out = self.net(xadv)
+        teacher_x = xadv.detach() if self.args.teacher_input == "adv" else x
+        dist_loss = self.get_dist_loss(x, s_adv_out, teacher_x)
+        adv_accu, is_adv_accu = self._Get_Accuracy(s_adv_out, y)
+        if self.ibp_coef > 0:
+            total_loss = IBP_loss*self.ibp_coef  + dist_loss*(1 - self.ibp_coef)
+        else:
+            total_loss = dist_loss
+        return total_loss, adv_accu, is_adv_accu
+
+    def get_dist_loss(self, inputs:torch.Tensor, s_adv_outputs:torch.Tensor, teacher_inputs: Optional[torch.Tensor]=None) -> torch.Tensor:
+        if teacher_inputs is None:
+            teacher_inputs = inputs
+        with torch.no_grad():
+            t_outputs = self.teacher(teacher_inputs)
+            t_nat_probs = F.log_softmax(t_outputs, dim=1)
+        if self.nat_kl:
+            s_outputs = self.net(inputs)
+            s_nat_probs = F.log_softmax(s_outputs, dim=1)
+            return F.kl_div(s_nat_probs, t_nat_probs, log_target=True, reduction='batchmean')
+        elif not self.rslad:
+            s_adv_probs = F.log_softmax(s_adv_outputs, dim=1)
+            return F.kl_div(s_adv_probs, t_nat_probs, log_target=True, reduction='batchmean')
+        else:
+            s_adv_probs = F.log_softmax(s_adv_outputs, dim=1)
+            s_outputs = self.net(inputs)
+            s_nat_probs = F.log_softmax(s_outputs, dim=1)
+            adv_dist_coef = 5.0/6.0 # recommended dist coeff value in RSLAD paper
+            return (1-adv_dist_coef) * F.kl_div(s_nat_probs, t_nat_probs, log_target=True, reduction='batchmean') + adv_dist_coef * F.kl_div(s_adv_probs, t_nat_probs, log_target=True, reduction='batchmean')
 
 # Function wrappers
 class BasicFunctionWrapper(BasicModelWrapper):     

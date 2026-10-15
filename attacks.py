@@ -35,7 +35,7 @@ class step_lr_scheduler:
             phase = len([x for x in self.interval if self.current_step>=x])
             return self.initial_step_size * self.gamma**(phase)
 
-def adv_whitebox(model:absSequential, X:torch.Tensor, y:torch.Tensor, specLB:torch.Tensor, specUB:torch.Tensor, device, num_steps:int=200, step_size:float=0.2, lossFunc:str="margin", restarts:int=1, train:bool=True):
+def adv_whitebox(model:absSequential, X:torch.Tensor, y:torch.Tensor, specLB:torch.Tensor, specUB:torch.Tensor, device, num_steps:int=200, step_size:float=0.2, lossFunc:str="margin", restarts:int=1, train:bool=True, teacher:absSequential=None):
     '''
     Conduct white-box adversarial attack on the model
 
@@ -51,6 +51,7 @@ def adv_whitebox(model:absSequential, X:torch.Tensor, y:torch.Tensor, specLB:tor
         lossFunc: str; the loss function to use, should be one of ["pgd", "margin", "KL"]
         restarts: int; the number of restarts to run the attack
         train: bool; if True, will find the worst-case loss adversarial example; if False, will stop when adversarial example is found
+        teacher: absSequential; teacher model for RSLAD style adversarial attacks
 
     @return
         adex: torch.Tensor; the adversarial example
@@ -66,6 +67,12 @@ def adv_whitebox(model:absSequential, X:torch.Tensor, y:torch.Tensor, specLB:tor
     adex_found = torch.zeros(X.shape[0], dtype=bool, device=X.device)
     best_loss = torch.ones(X.shape[0], dtype=bool, device=X.device)*(-np.inf)
     lr_scale = (specUB-specLB)/2
+    t_nat_probs = None
+
+    if lossFunc == "KL" and teacher is not None:
+        with torch.no_grad():
+            t_outputs = teacher(X)
+            t_nat_probs = F.log_softmax(t_outputs, dim=1)
 
     with torch.enable_grad():
         for _ in range(restarts):
@@ -91,8 +98,11 @@ def adv_whitebox(model:absSequential, X:torch.Tensor, y:torch.Tensor, specLB:tor
                         loss = nn.CrossEntropyLoss(reduction="none")(out, y)
                     elif lossFunc == "margin":
                         loss = margin_loss(out, y, device)
-                    elif lossFunc == "KL":
+                    elif lossFunc == "KL" and teacher is None:
                         loss = nn.KLDivLoss(reduction='none')(F.log_softmax(out, dim=1), F.softmax(model(X), dim=1)).sum(dim=-1)
+                    elif lossFunc == "KL" and teacher is not None:
+                        s_adv_probs = F.log_softmax(out, dim=1)
+                        loss = F.kl_div(s_adv_probs, t_nat_probs, log_target=True, reduction="none").sum(dim=-1)
 
                     is_adv = torch.argmax(out, dim=1) != y
                     if not train:

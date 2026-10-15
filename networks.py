@@ -534,7 +534,7 @@ def cnn_13layer(normalize, in_ch=3, in_dim=32, width=64, linear_size=512, num_cl
     )
     return model
 
-def cnn_7layer_bn_tinyimagenet(normalize, in_ch=3, in_dim=32, width=64, linear_size=512, num_class=200):
+def cnn_7layer_bn_tinyimagenet(normalize, in_ch=3, in_dim=64, width=64, linear_size=512, num_class=200):
     model = nn.Sequential(
         normalize,
         nn.Conv2d(in_ch, width, 3, stride=1, padding=1),
